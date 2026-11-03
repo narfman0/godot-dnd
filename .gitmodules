@@ -1,0 +1,3 @@
+[submodule "vendor/godot-srd-addon"]
+	path = vendor/godot-srd-addon
+	url = https://github.com/narfman0/godot-srd-addon.git
