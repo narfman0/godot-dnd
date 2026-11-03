@@ -36,13 +36,10 @@ scene and navigation instead, and nothing in the addon changes.
 
 ## Gaps to know about
 
-All of these come from the SRD pack, which is maintained in grimoire:
-
-- Monsters: 10 of ~330. Weapons: 16 of 38.
-- 214 of 310 spells are stubs (name/level/school, no mechanics) and build with the `stub`
-  tag. Spells with effects `AbilityData` can't express yet (Magic Missile's darts,
-  multi-part damage) carry `partial`.
-- 48 spells have no `classes` list, so `class_spell_slugs` misses them.
+The addon's SRD data is extracted from the SRD 5.2.1 PDF a section at a time. Spells,
+monster stat blocks, weapons, armor, and class core traits are in. Class features,
+subclasses, species, backgrounds, and feats are not yet. Spell mechanics are detected
+heuristically: utility spells, and damage the extractor misses, build tagged `no_mechanics`.
 
 The turn loop also leaves out opportunity attacks, cover, spellcasting during turns, and
 player input.

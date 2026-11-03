@@ -22,8 +22,8 @@ func run(log: ExampleLog, srd: SRDContent) -> void:
 	log.line("DC %d DEX save, %dd%d %s, half on save" % [fireball.spell_save_dc(wizard.stats),
 		fireball.damage_die_count, fireball.damage_die_sides,
 		SRD.DamageType.keys()[fireball.damage_type].to_lower()])
-	var goblins := [srd.make_monster("goblin", 1), srd.make_monster("goblin", 2),
-		srd.make_monster("goblin", 3)]
+	var goblins := [srd.make_monster("goblin-warrior", 1), srd.make_monster("goblin-warrior", 2),
+		srd.make_monster("goblin-warrior", 3)]
 	var positions := { goblins[0]: Vector2(0, 0), goblins[1]: Vector2(10, 5), goblins[2]: Vector2(40, 0) }
 
 	# The game supplies geometry; the addon supplies rules.

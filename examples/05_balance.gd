@@ -9,10 +9,10 @@ const TRIALS := 200
 func run(log: ExampleLog, srd: SRDContent) -> void:
 	seed(1)
 	log.heading("Party of 4 (L3) — win rate over %d simulated fights" % TRIALS)
-	for group in [["goblin", "goblin", "goblin", "goblin"],
-			["orc", "orc", "orc"],
+	for group in [["goblin-warrior", "goblin-warrior", "goblin-warrior", "goblin-warrior"],
+			["zombie", "zombie", "zombie", "ghoul"],
 			["ogre"],
-			["ogre", "bugbear", "bugbear"]]:
+			["ogre", "bugbear-warrior", "bugbear-warrior"]]:
 		var xp := 0
 		for slug in group:
 			xp += srd.monster_xp(slug)
@@ -34,5 +34,5 @@ func _party(srd: SRDContent) -> Array:
 		srd.make_character("Rynn", "fighter", 3, [16, 12, 14, 8, 12, 10], "longsword", "chain-mail", true),
 		srd.make_character("Kael", "rogue", 3, [8, 16, 14, 12, 10, 12], "rapier", "leather-armor"),
 		srd.make_character("Sova", "cleric", 3, [14, 10, 14, 10, 16, 12], "quarterstaff", "chain-shirt", true),
-		srd.make_character("Bram", "barbarian", 3, [16, 14, 15, 8, 10, 10], "greatsword", "hide"),
+		srd.make_character("Bram", "barbarian", 3, [16, 14, 15, 8, 10, 10], "greatsword", "hide-armor"),
 	]

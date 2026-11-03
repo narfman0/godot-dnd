@@ -16,12 +16,12 @@ func run(log: ExampleLog, srd: SRDContent) -> void:
 	enc.add(srd.make_character("Sova", "cleric", 3, [14, 10, 14, 10, 16, 12],
 		"quarterstaff", "chain-shirt", true), Vector2i(-1, 1), true)
 
-	enc.add(srd.make_monster("goblin", 1), Vector2i(8, 0), false, CombatAI.Profile.SKIRMISHER)
-	enc.add(srd.make_monster("goblin", 2), Vector2i(8, 2), false, CombatAI.Profile.SKIRMISHER)
-	enc.add(srd.make_monster("hobgoblin", 1), Vector2i(9, 1), false)
+	enc.add(srd.make_monster("goblin-warrior", 1), Vector2i(8, 0), false, CombatAI.Profile.SKIRMISHER)
+	enc.add(srd.make_monster("goblin-warrior", 2), Vector2i(8, 2), false, CombatAI.Profile.SKIRMISHER)
+	enc.add(srd.make_monster("hobgoblin-warrior", 1), Vector2i(9, 1), false)
 	enc.add(srd.make_monster("wolf", 1), Vector2i(7, 4), false)
 
-	log.heading("Party (L3) vs 2 goblins, a hobgoblin, and a wolf")
+	log.heading("Party (L3) vs 2 goblin warriors, a hobgoblin warrior, and a wolf")
 	var winner := enc.run()
 	log.heading("Result: %s after %d rounds" % [winner, enc.round_number])
 	for c in enc.party + enc.enemies:

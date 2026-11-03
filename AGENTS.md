@@ -6,8 +6,8 @@ start as new projects that copy patterns from here.
 - Rules live in the addon (`vendor/godot-srd-addon`, symlinked at `addons/srd`). Change
   rules there, with GUT tests (`godot --headless -s addons/gut/gut_cmdln.gd
   -gdir=res://tests -gexit`, run from the addon repo), then bump the submodule here.
-- SRD data comes from grimoire's `content-packs/srd-5.2`. Fix data gaps there, then run
-  the addon's `tools/sync_srd_pack.sh`.
+- SRD data is extracted from the official SRD 5.2.1 PDF by the addon's
+  `tools/extract_srd.py`. Extend the extractor there when a game needs a new section.
 - Each example is a `RefCounted` with `TITLE` and `run(log: ExampleLog, srd: SRDContent)`,
   registered in `examples/examples.gd`. Use `log.check()` so the example also works as a
   smoke test.
