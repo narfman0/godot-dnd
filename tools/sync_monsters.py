@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Copy rigged monsters from monster-forge into assets/monsters/<id>/ (stdlib only).
+
+    python3 -I tools/sync_monsters.py --all
+    python3 -I tools/sync_monsters.py --ids wolf harpy
+    python3 -I tools/sync_monsters.py --all --forge ~/workspace/monster-forge --source srd-5.2.1
+
+Copies only what the game loads: model_rigged.glb (LOD0, textures embedded),
+model_rigged_lod<k>.glb (geometry only, they use LOD0's material) and anims/<clip>.glb, and
+writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lods). Never
+model_hi.glb, PNGs or paint/. Idempotent: files are compared by content, unchanged files are
+left alone, files the source no longer has are removed. Monsters without a rig are skipped.
+See docs/monsters.md.
+"""
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import struct
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEST = ROOT / "assets" / "monsters"
+DEFAULT_FORGE = Path(os.environ.get("MONSTER_FORGE", ROOT.parent / "monster-forge"))
+
+
+def digest(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def glb_json(p: Path) -> dict:
+    with p.open("rb") as f:
+        head = f.read(20)
+        if head[:4] != b"glTF":
+            raise ValueError(f"{p} is not a GLB")
+        n = struct.unpack("<I", head[12:16])[0]
+        return json.loads(f.read(n))
+
+
+def glb_tris(p: Path) -> int:
+    j = glb_json(p)
+    tris = 0
+    for m in j.get("meshes", []):
+        for prim in m["primitives"]:
+            if "indices" in prim:
+                tris += j["accessors"][prim["indices"]]["count"] // 3
+            else:
+                tris += j["accessors"][prim["attributes"]["POSITION"]]["count"] // 3
+    return tris
+
+
+def wanted_files(src: Path) -> dict[str, Path]:
+    """Relative destination path -> source file."""
+    files = {"model_rigged.glb": src / "model_rigged.glb"}
+    for p in sorted(src.glob("model_rigged_lod*.glb")):
+        files[p.name] = p
+    for p in sorted((src / "anims").glob("*.glb")):
+        files[f"anims/{p.name}"] = p
+    return files
+
+
+def monster_json(src: Path, files: dict[str, Path]) -> dict:
+    man = json.loads((src / "manifest.json").read_text())
+    rig = man.get("rig") or {}
+    lods = {"0": {"file": "model_rigged.glb", "tris": glb_tris(files["model_rigged.glb"])}}
+    for name in files:
+        if name.startswith("model_rigged_lod"):
+            k = name[len("model_rigged_lod"):-len(".glb")]
+            lods[k] = {"file": name, "tris": glb_tris(files[name])}
+    # The rig stage renames each socket bone to the socket name in the GLB; the manifest
+    # maps socket -> the bone it was derived from (kept for reference).
+    sockets = {s: {"bone": s, "from": b} for s, b in sorted(rig.get("sockets", {}).items())}
+    return {
+        "id": man["id"],
+        "name": man.get("name", man["id"]),
+        "source": man.get("source"),
+        "scale_m": man.get("scale_m"),
+        "body_plan": man.get("body_plan"),
+        "sockets": sockets,
+        "clips": sorted(Path(n).stem for n in files if n.startswith("anims/")),
+        "lods": dict(sorted(lods.items(), key=lambda kv: int(kv[0]))),
+        "joints": rig.get("joints"),
+    }
+
+
+def sync_one(src: Path, dest: Path) -> list[str]:
+    changes = []
+    files = wanted_files(src)
+    dest.mkdir(parents=True, exist_ok=True)
+    for rel, sp in files.items():
+        dp = dest / rel
+        if dp.exists() and dp.stat().st_size == sp.stat().st_size and digest(dp) == digest(sp):
+            continue
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dp.with_suffix(dp.suffix + ".tmp")
+        shutil.copyfile(sp, tmp)
+        changes.append(("updated " if dp.exists() else "added   ") + rel)
+        tmp.replace(dp)
+    # Remove GLBs the source no longer has (and Godot's .import sidecars for them).
+    for dp in sorted(list(dest.glob("*.glb")) + list(dest.glob("anims/*.glb"))):
+        rel = dp.relative_to(dest).as_posix()
+        if rel not in files:
+            dp.unlink()
+            Path(str(dp) + ".import").unlink(missing_ok=True)
+            changes.append("removed " + rel)
+    text = json.dumps(monster_json(src, files), indent=1) + "\n"
+    mj = dest / "monster.json"
+    if not mj.exists() or mj.read_text() != text:
+        changes.append(("updated " if mj.exists() else "added   ") + "monster.json")
+        mj.write_text(text)
+    return changes
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--ids", nargs="+", metavar="ID")
+    g.add_argument("--all", action="store_true", help="every monster with model_rigged.glb")
+    ap.add_argument("--forge", type=Path, default=DEFAULT_FORGE, help="monster-forge checkout")
+    ap.add_argument("--source", default="srd-5.2.1")
+    ap.add_argument("--dest", type=Path, default=DEST)
+    a = ap.parse_args()
+
+    out = a.forge.expanduser() / "out" / a.source
+    if not out.is_dir():
+        print(f"no such directory: {out}", file=sys.stderr)
+        return 2
+    ids = a.ids or sorted(p.name for p in out.iterdir() if (p / "model_rigged.glb").exists())
+    if a.all and a.dest.is_dir():
+        for p in sorted(a.dest.iterdir()):
+            if (p / "monster.json").exists() and p.name not in ids:
+                print(f"{p.name}: kept (no model_rigged.glb upstream right now; delete the folder to drop it)")
+    failed = 0
+    for mid in ids:
+        src = out / mid
+        if not (src / "model_rigged.glb").exists() or not (src / "manifest.json").exists():
+            print(f"{mid}: skipped (no model_rigged.glb or manifest.json in {src})")
+            failed += 1
+            continue
+        try:
+            changes = sync_one(src, a.dest / mid)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"{mid}: FAILED {e}")
+            failed += 1
+            continue
+        print(f"{mid}: " + ("unchanged" if not changes else f"{len(changes)} change(s)"))
+        for c in changes:
+            print("  " + c)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
