@@ -9,7 +9,8 @@ extends Node3D
 
 const Monster = preload("res://scripts/monster.gd")
 ## Props per monster; any other monster with a hand_r socket gets the sword.
-const LOADOUT := {"goblin-warrior": {"hand_r": "sword", "hand_l": "bow"}}
+## Values are sides: "r" -> grip_r (or hand_r when the rig has no grip bones).
+const LOADOUT := {"goblin-warrior": {"r": "sword", "l": "bow"}}
 const FOV := 50.0
 
 var monster: Node3D
@@ -46,21 +47,39 @@ func _ready() -> void:
 
 
 func _build_world() -> void:
+	# Studio-like lighting, close to monster-forge's viewer: a sky that the PBR materials
+	# reflect and are lit by (some pilots export metallic ~1.0, which reads black without an
+	# environment), a key light from the front (-Z side, where the monsters face) and a fill.
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.55, 0.62, 0.75)
+	sky_mat.sky_horizon_color = Color(0.85, 0.85, 0.85)
+	sky_mat.ground_horizon_color = Color(0.6, 0.6, 0.62)
+	sky_mat.ground_bottom_color = Color(0.25, 0.25, 0.28)
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	e.sky = sky
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = Color(0.16, 0.17, 0.2)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.75, 0.75, 0.8)
-	e.ambient_light_energy = 0.6
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	e.ambient_light_energy = 1.0
+	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.tonemap_exposure = 1.1
 	env.environment = e
 	add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -30, 0)
-	sun.shadow_enabled = true
-	sun.light_energy = 1.2
-	add_child(sun)
+	var key := DirectionalLight3D.new()
+	key.name = "key"
+	key.rotation_degrees = Vector3(-40, 150, 0)   # from the front-right, above; light travels toward +Z
+	key.shadow_enabled = true
+	key.light_energy = 2.0
+	add_child(key)
+	var fill := DirectionalLight3D.new()
+	fill.name = "fill"
+	fill.rotation_degrees = Vector3(-20, -60, 0)  # from behind-left, no shadows
+	fill.light_energy = 0.6
+	add_child(fill)
 	_camera = Camera3D.new()
 	_camera.fov = FOV
 	_camera.far = 500.0
@@ -179,9 +198,13 @@ func select_monster(id: String) -> void:
 	monster = m
 	add_child(m)
 	_ui_monster.select(ids.find(id))
-	var loadout: Dictionary = LOADOUT.get(id, {"hand_r": "sword"})
-	for socket in loadout:
-		var prop: Node3D = Monster.make_sword() if loadout[socket] == "sword" else Monster.make_bow()
+	m.settle_clip = "idle"   # hit / attacks go back to idle; death holds its last frame
+	var loadout: Dictionary = LOADOUT.get(id, {"r": "sword"})
+	for side in loadout:
+		var socket: String = m.grip_socket(side)
+		if socket == "":
+			continue
+		var prop: Node3D = Monster.make_sword() if loadout[side] == "sword" else Monster.make_bow()
 		m.attach_prop(prop, socket)
 	m.set_props_visible(show_props)
 	_figure.position = Vector3(m.aabb.position.x - 0.6, 0, 0)

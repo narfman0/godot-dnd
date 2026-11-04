@@ -1,9 +1,12 @@
-## Screenshots of the monster lab, one PNG per monster and view (needs a display or xvfb):
-##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [views=three,front,side,hand_r,hand_l,lods]
-##         [t=0.5] [skel=1] [clip=walk]
+## Screenshots of the monster lab, one PNG per monster, clip, time and view. Needs a display;
+## headless servers: xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan ...
+##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|all|idle,hit]
+##         [ts=0.5|0.3,0.5,0.7] [views=three,front,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
 ## Views: three (3/4 front), front (camera on -Z looking +Z), side (camera on +X), top,
-## hand_r / hand_l (close-up on the socket with skeleton and socket axes), lods (LOD0..3 at the same frame).
-## The clip is paused at t (fraction of its length) so every view shows the same pose.
+## hand_*/grip_* (close-up on that socket with skeleton and socket axes; skipped when the
+## rig lacks it), lods (LOD0..3 at the same frame). The clip is paused at each t (fraction
+## of its length), so every view of one t shows the same pose.
+## File names: <id>_<clip>_t<pct>_<view>.png (lods: ..._lod<k>.png).
 extends SceneTree
 
 const Lab = preload("res://scenes/monster_lab.tscn")
@@ -11,9 +14,9 @@ const Lab = preload("res://scenes/monster_lab.tscn")
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
-	var out := args[0] if args.size() > 0 else "user://shots"
+	var out: String = args[0] if args.size() > 0 else "user://shots"
 	DirAccess.make_dir_recursive_absolute(out)
-	var opt := {"ids": "", "views": "three", "t": "0.5", "skel": "0", "clip": "walk"}
+	var opt := {"ids": "", "views": "three", "ts": "0.5", "skel": "0", "clips": "walk"}
 	for a in args.slice(1):
 		var kv := a.split("=", true, 1)
 		opt[kv[0]] = kv[1] if kv.size() > 1 else "1"
@@ -31,44 +34,55 @@ func _initialize() -> void:
 		if m == null:
 			push_error("cannot load " + id)
 			continue
-		var clip: String = opt["clip"] if opt["clip"] in m.clips() else "rest"
-		lab.select_clip(clip)
-		if clip != "rest":
-			m.anim.seek(m.anim.get_animation(clip).length * float(opt["t"]), true)
-			m.anim.speed_scale = 0.0
-		lab.show_skeleton = opt["skel"] == "1"
-		for view in opt["views"].split(","):
-			lab.set_lod_mode(-1)
-			lab.frame()
-			lab.cam_pitch = 0.2
-			match view:
-				"front":
-					lab.cam_yaw = 0.0
-				"side":
-					lab.cam_yaw = PI / 2
-				"top":
-					lab.cam_yaw = 0.0
-					lab.cam_pitch = 1.45
-				"three":
-					lab.cam_yaw = 0.6
-				"hand_r", "hand_l":
-					if not m.has_socket(view):
-						continue
-					var sk: Skeleton3D = m.skeleton
-					lab.cam_target = sk.global_transform * sk.get_bone_global_pose(sk.find_bone(view)).origin
-					lab.cam_dist = 0.6 * float(m.info.get("scale_m", 1.8)) / 1.8 + 0.3
-					lab.cam_yaw = 0.5 if view == "hand_r" else -0.5
-					lab.cam_pitch = 0.1
-					lab.show_skeleton = true
-			if view == "lods":
-				lab.cam_yaw = 0.6
-				for k in m.lods.size():
-					lab.set_lod_mode(k)
-					await _shot("%s/%s_lod%d.png" % [out, id, k])
+		var clips: PackedStringArray = m.clips() if opt["clips"] == "all" else opt["clips"].split(",")
+		for clip in clips:
+			if clip != "rest" and not clip in m.clips():
 				continue
-			await _shot("%s/%s_%s.png" % [out, id, view])
-			lab.show_skeleton = opt["skel"] == "1"
+			for ts in opt["ts"].split(","):
+				lab.select_clip(clip)
+				if clip != "rest":
+					m.anim.seek(m.anim.get_animation(clip).length * float(ts), true)
+					m.anim.speed_scale = 0.0
+				var stem := "%s/%s_%s_t%02d" % [out, id, clip, int(float(ts) * 100)]
+				for view in opt["views"].split(","):
+					await _view(lab, m, view, stem, opt["skel"] == "1")
+				m.anim.speed_scale = 1.0
 	quit()
+
+
+func _view(lab: Node3D, m: Node3D, view: String, stem: String, skel: bool) -> void:
+	lab.show_skeleton = skel
+	lab.set_lod_mode(-1)
+	lab.frame()
+	lab.cam_pitch = 0.2
+	match view:
+		"front":
+			lab.cam_yaw = 0.0
+		"side":
+			lab.cam_yaw = PI / 2
+		"top":
+			lab.cam_yaw = 0.0
+			lab.cam_pitch = 1.45
+		"three", "lods":
+			lab.cam_yaw = 0.6
+		"hand_r", "hand_l", "grip_r", "grip_l":
+			if not m.has_socket(view):
+				return
+			var sk: Skeleton3D = m.skeleton
+			lab.cam_target = sk.global_transform * sk.get_bone_global_pose(sk.find_bone(view)).origin
+			lab.cam_dist = 0.6 * float(m.info.get("scale_m", 1.8)) / 1.8 + 0.3
+			lab.cam_yaw = 0.5 if view.ends_with("_r") else -0.5
+			lab.cam_pitch = 0.1
+			lab.show_skeleton = true
+		_:
+			push_error("unknown view " + view)
+			return
+	if view == "lods":
+		for k in m.lods.size():
+			lab.set_lod_mode(k)
+			await _shot("%s_lod%d.png" % [stem, k])
+		return
+	await _shot("%s_%s.png" % [stem, view])
 
 
 func _shot(path: String) -> void:

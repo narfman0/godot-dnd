@@ -10,7 +10,7 @@ python3 -I tools/sync_monsters.py --all                 # or --ids wolf harpy
 godot res://scenes/monster_lab.tscn                     # look at them
 godot --headless -s res://tools/check_monsters.gd       # import test, prints ALL PASS
 xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan \
-    -s res://tools/lab_screenshot.gd -- /tmp/shots views=three,front,side,hand_r,hand_l,lods
+    -s res://tools/lab_screenshot.gd -- /tmp/shots clips=all ts=0.5 views=three,grip_r,lods
 ```
 
 `assets/monsters/` is git-ignored (generated art, ~15 MB per monster): sync after cloning.
@@ -83,15 +83,37 @@ Measured by `tools/check_monsters.gd` and screenshots on the six pilots (2026-11
 | Facing | **-Z**, for all six. The head end is at -Z for the quadrupeds and the dragon, and the front and top screenshots show the faces toward -Z. On handed bipeds `hand_r` is at +X (creature's right = +X). Use `Node3D.look_at(target)` as is (`use_model_front = false`). This is the opposite of glTF's own "+Z is front" and of Godot's `Vector3.MODEL_FRONT` (+Z). |
 | Skeleton | one `Skeleton3D` per file. Bones named `bone_<n>`, socket bones named by socket. LOD1-3 have the same bone names in the same order and the same skin binds (by index) and bind poses as LOD0. Checked per file, any difference is rejected. |
 | LOD material | the LOD files have a material (`Material_0.001`, not LOD0's name) without textures. The loader applies LOD0's material as a surface override. |
-| Clips | armature-only GLB. All tracks are `Armature/Skeleton3D:<bone>` and bind 100% by bone name (wolf 18/18, owlbear 18/18, spider 31/31, harpy 12/12, dragon 27/27, goblin 9/9) |
-| Root motion | none: walk clips are in place, and the root bone ends where it starts |
+| Clips | one armature-only GLB per clip, listed in `manifest.anim.clips`. All tracks are `Armature/Skeleton3D:<bone>` and bind 100% by bone name, for every clip of every pilot (36 clips; table below) |
+| Root motion | none: the clips are in place, and the root bone ends where it starts |
+| Grip sockets | `grip_r` / `grip_l`: non-deforming children of `hand_r` / `hand_l`, at the centre of the fist (goblin: 2 cm from the hand bone, 53-66 vertices within 5 cm), in prop space. At rest +Y points forward (-Z) and +Z points up (+Y), so a sword points forward with its -Z edge down. Goblin and harpy have them. |
+
+Round 2 run (2026-11-04, after `sync_monsters.py --all`), tracks bound / total per clip:
+
+| id | clips (bound/total) | lowest y during walk (bone) |
+|---|---|---|
+| giant-spider | attack_melee 32/32, death 32/32, hit 32/32, idle 31/31, walk 31/31 | -0.001 (bone_22) |
+| goblin-warrior | attack_melee 12/12, attack_ranged 5/5, death 15/15, hit 14/14, idle 14/14, walk 9/9 | -0.000 (bone_27) |
+| harpy | attack_melee 14/14, death 17/17, fly 16/16, hit 18/18, idle 18/18, walk 10/10 | -0.008 (bone_0) |
+| owlbear | attack_melee 20/20, death 22/22, hit 20/20, idle 19/19, walk 18/18 | -0.015 (bone_19) |
+| wolf | attack_melee 21/21, death 23/23, hit 21/21, idle 22/22, walk 18/18 | -0.001 (bone_16) |
+| young-red-dragon | attack_melee 32/32, breath 26/26, death 26/26, fly 30/30, hit 34/34, idle 36/36, walk 26/26 | -0.000 (bone_20) |
 
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
 Tracks whose bone is missing are dropped and counted (`report.clips[clip].unbound`).
-None were dropped on the pilots. Clips named `idle`, `walk`, `run`, `move`, `fly`,
-`swim` and `hover` loop. Every other clip plays once.
+None were dropped on the pilots.
+
+Loop modes come from a name list, `Monster.LOOPING` (`idle`, `walk`, `run`, `move`, `fly`,
+`swim`, `hover`), not from the GLB, which has no loop flag. Every other clip (`hit`,
+`death`, `attack_*`, `breath`) is `LOOP_NONE`: it plays once and stops on its last frame.
+`Monster.settle_clip` sets what happens next. With `""` (the default) the last frame holds.
+The lab sets it to `"idle"`, so hit, attacks and breath go back to idle afterwards, while
+clips in `Monster.HOLD_LAST` (`death`) always hold their last frame. The check plays every
+clip for its length + 0.3 s in real frames:
+- looping clips are still playing;
+- one-shots have stopped, within 0.06° of their last frame;
+- with `settle_clip = "idle"`, hit, attacks and breath move on to idle, and death holds.
 
 Godot's glTF importer drops channels that never leave the rest pose. The walk GLBs
 carry one channel per bone and property (wolf: 84), but only the 17-18 that move become
@@ -123,14 +145,33 @@ because runtime meshes have no generated LODs.
 
 ### Sockets and props
 
-`attach_prop(prop, socket)` adds a `BoneAttachment3D` (`bone_name = socket`) under the
+Held props go on `grip_socket("r")` / `grip_socket("l")`: `grip_r` / `grip_l` when the rig
+has them, else `hand_r` / `hand_l`. `attach_prop(prop, socket)` adds a `BoneAttachment3D` (`bone_name = socket`) under the
 skeleton and parents the prop to it, scaled by `scale_m / 1.8`. `make_sword()` and
 `make_bow()` are placeholders in the prop space from monster-forge's `docs/equipment.md`:
 origin at the grip, +Y along the blade or limbs, and -Z the cutting edge (red stripe) or
-arrow (yellow). The lab gives every monster with `hand_r` a sword, and the goblin a sword
-plus a bow on `hand_l`.
+arrow (yellow). The lab gives every monster with a right hand a sword on `grip_r`, and the goblin also a bow
+on `grip_l`.
 
-**Mismatch: the socket bone is not a grip frame.** equipment.md defines the socket as the
+With grip bones this works. In the goblin's attack_melee screenshots at 25/50/75%, the
+guard sits in the closed fist through the whole swing. The blade is raised overhead at
+50% and swept across the body at 75%. The edge leads the forward chop: at 50% the
+grip's -Z (the edge) is 0.69 aligned with the fist's motion. In attack_ranged the bow's
+limbs are vertical and the arrow points forward. In idle and walk the sword points
+forward with the edge down.
+
+Remaining notes on props:
+- The rest-pose grip frame puts a bow on its side, with limbs forward and the arrow
+  pointing down, whenever the left hand is not in a drawing pose (idle, walk). That is
+  fine for swords. A bow at rest would want its limbs vertical, which is a per-prop "carry"
+  offset or a stow socket (`back`).
+- The goblin's attack_ranged keys only 5 tracks, and the left (bow) hand does not move: the
+  grip_l position is the same at 25, 50 and 75%. The sword stays in the right hand during
+  the shot, because the lab does not swap loadouts per clip.
+- The harpy's grips inherit its hand problem (below). `grip_r` is 12 cm from the mesh at
+  rest and 27 cm away mid-attack.
+
+**Before round 2 (no grip bones): the hand bone is not a grip frame.** equipment.md defines the socket as the
 deform hand bone (head at the wrist) and the prop origin as the centre of the fist, with +Y
 along the blade. In Godot a `BoneAttachment3D` puts the prop at the bone's origin with the
 bone's axes. That is the wrist, with +Y running wrist -> fingers (0° from the hand bone's
@@ -138,12 +179,19 @@ direction). On the goblin the sword hangs from the wrist, pointing down along th
 and through the floor. A held weapon needs a grip frame: origin about half a hand-length
 along the hand bone, and +Y across the palm (thumb side). Either the rig exports
 `grip_r` / `grip_l` child bones in prop space, or equipment.md specifies the
-hand-to-grip offset per rig. Until then, props need a hand-tuned offset node.
+hand-to-grip offset per rig. The rig stage now exports those grip bones (round 2).
 
 ## Monster lab (`scenes/monster_lab.tscn`)
 
-A ground grid (0.5 m, brighter every metre, +X red, +Z blue), a 1.8 m reference capsule
-with a nose on -Z, and a sun with shadows. The monster list is every folder in
+A ground grid (0.5 m, brighter every metre, +X red, +Z blue) and a 1.8 m reference capsule
+with a nose on -Z. Lighting is close to the monster-forge viewer's studio setup:
+- a procedural sky that supplies ambient light and reflections;
+- a key light with shadows from the front-right, where the monsters face (the round 1 sun
+  lit them from behind);
+- a fill light from behind-left.
+
+Without the sky, metallic surfaces render nearly black. Some pilots export metallic ≈ 1.0
+(goblin, harpy; see below). The monster list is every folder in
 `assets/monsters/` with a `monster.json`.
 
 | input | action |
@@ -163,9 +211,13 @@ distances.
 
 ## Known issues in the current pilots (reported upstream)
 
-- Walk clips push geometry below y = 0 mid-stride. Lowest skinned vertex over a cycle:
-  owlbear -0.19 m (leg bone_25), dragon -0.10 m (tail bone_64), harpy -0.10 m (pelvis
-  bone_0), wolf -0.05 m (foot bone_26), goblin -0.03 m, spider -0.01 m.
+- Fixed in round 2: walk clips no longer push geometry below y = 0. The worst is now the
+  owlbear at -0.015 m (in round 1 it was -0.19 m).
+- Metallic: every material has the default `metallicFactor` 1.0 times a metallic texture.
+  The texture's mean blue (metallic) channel is goblin 255, harpy 249, owlbear 88, spider 80,
+  wolf 0, dragon 0. So the goblin and harpy are effectively full metal, painted creatures
+  rendered as dark mirrors unless an environment lights them. Probably a generator
+  default worth clamping upstream.
 - Harpy: the skeleton is off-centre (root at x +0.068, shoulders at +0.26 / -0.125). The
   right forearm and hand bones (bone_18, bone_19) carry no vertex with weight > 0.5. The
   right arm is skinned to the wing chain (bone_11, bone_12), so `hand_r` does not follow

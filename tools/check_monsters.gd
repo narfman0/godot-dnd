@@ -28,7 +28,7 @@ func _initialize() -> void:
 			continue
 		root.add_child(m)
 		await process_frame
-		rows.append(_row(m, details))
+		rows.append(await _row(m, details))
 		m.queue_free()
 		await process_frame
 	print("\n".join(rows))
@@ -112,10 +112,9 @@ func _row(m: Node3D, details: Array[String]) -> String:
 					var fd := _follow_dev(m, pos, k)
 					d.append("    LOD%d follows the skeleton: vertex displacement vs nearest LOD0 vertex, median %.4f m, p95 %.4f m (LOD0 displacement p95 %.3f m)" % [k, fd[0], fd[1], fd[2]])
 					_check(fd[1] < 0.1 * fd[2] + 0.005, "%s: LOD%d does not follow the skeleton (p95 %.3f m)" % [m.id, k, fd[1]])
-				if m.has_socket("hand_r"):
-					d.append("  " + _socket(m, pos, "hand_r"))
-				if m.has_socket("hand_l"):
-					d.append("  " + _socket(m, pos, "hand_l"))
+				for so in ["hand_r", "hand_l", "grip_r", "grip_l"]:
+					if m.has_socket(so):
+						d.append("  " + _socket(m, pos, so))
 		var root_end := sk.get_bone_global_pose(0).origin
 		d.append("  %s: root bone travels %s over the clip (in place if ~0); %.2fs %s" % [clip, root_end - root_start, a.length, ["once", "loop", "pingpong"][a.loop_mode]])
 		walk_low = "%.3f (%s)" % [low, low_bone]
@@ -131,6 +130,19 @@ func _row(m: Node3D, details: Array[String]) -> String:
 			per_clip.append("%s %d bones" % [c, mv])
 			_check(mv > 0, "%s/%s: no bone moved" % [m.id, c])
 		d.append("  played mid-clip: " + ", ".join(per_clip))
+		d.append(await _playback(m))
+		for side in ["r", "l"]:
+			var g: String = "grip_" + side
+			if not m.has_socket(g):
+				continue
+			var gr := sk.get_bone_global_rest(sk.find_bone(g))
+			d.append("  %s rest: +Y %s (forward = -Z), +Z %s (up = +Y), %.3f m from hand_%s" % [g, gr.basis.y.normalized(), gr.basis.z.normalized(), gr.origin.distance_to(sk.get_bone_global_rest(sk.find_bone("hand_" + side)).origin), side])
+			var atk := "attack_melee" if side == "r" else "attack_ranged"
+			if atk in clips:
+				for f in [0.25, 0.5, 0.75]:
+					m.play(atk)
+					m.anim.seek(m.anim.get_animation(atk).length * f, true)
+					d.append("    %s @ %d%%: %s" % [atk, int(f * 100), _socket(m, _skinned(m, m.lods[0], false), g)])
 		# Switching clips: bones the new clip does not key must go back to rest (Godot drops
 		# glTF channels that never leave the rest pose, so clips key different bone sets).
 		m.play(clip)
@@ -297,6 +309,67 @@ func _facing(pts: PackedVector3Array, bb: AABB) -> Array:
 			foot_z / maxi(foot_n, 1) - shin_z / maxi(shin_n, 1), top_min, top_max]
 
 
+## Loop modes come from Monster.LOOPING, not the GLB: looping clips keep playing past their
+## length; one-shots stop on their last frame; with settle_clip they hand over to idle,
+## except death, which holds.
+func _playback(m: Node3D) -> String:
+	var sk: Skeleton3D = m.skeleton
+	var out := []
+	for c in m.clips():
+		var a: Animation = m.anim.get_animation(c)
+		m.settle_clip = ""
+		m.play(c)
+		m.anim.seek(a.length, true)
+		var last := _pose(sk)
+		m.play("rest")
+		m.play(c)
+		await _run(m, a.length + 0.3)
+		var playing: bool = m.anim.is_playing()
+		var dev := _pose_diff(sk, last)
+		var looping: bool = c in m.LOOPING
+		if looping:
+			_check(playing and a.loop_mode == Animation.LOOP_LINEAR, "%s/%s should loop" % [m.id, c])
+			out.append("%s loops" % c)
+		else:
+			_check(not playing and dev < 0.1 and a.loop_mode == Animation.LOOP_NONE, "%s/%s should play once and hold its last frame (playing %s, %.2f deg off last frame)" % [m.id, c, playing, dev])
+			var settled := ""
+			m.settle_clip = "idle" if "idle" in m.clips() else ""
+			m.play("rest")
+			m.play(c)
+			await _run(m, a.length + 0.3)
+			settled = m.anim.current_animation if m.anim.is_playing() else "holds"
+			if c in m.HOLD_LAST:
+				_check(settled == "holds" and _pose_diff(sk, last) < 0.1, "%s/%s should hold its last frame even with settle_clip" % [m.id, c])
+			out.append("%s once, holds last frame (%.2f deg); with settle_clip=idle -> %s" % [c, dev, settled])
+	m.settle_clip = ""
+	m.play("rest")
+	return "  playback (real frames): " + "; ".join(out)
+
+
+func _run(m: Node3D, seconds: float) -> void:
+	var t := 0.0
+	while t < seconds:
+		m.anim.advance(1.0 / 30.0)
+		t += 1.0 / 30.0
+		await process_frame
+
+
+func _pose(sk: Skeleton3D) -> Array:
+	var p := []
+	for b in sk.get_bone_count():
+		p.append(sk.get_bone_pose(b))
+	return p
+
+
+func _pose_diff(sk: Skeleton3D, p: Array) -> float:
+	var worst := 0.0
+	for b in sk.get_bone_count():
+		var q: Transform3D = sk.get_bone_pose(b)
+		worst = maxf(worst, rad_to_deg(q.basis.get_rotation_quaternion().angle_to((p[b] as Transform3D).basis.get_rotation_quaternion())))
+		worst = maxf(worst, q.origin.distance_to((p[b] as Transform3D).origin) * 100.0)
+	return worst
+
+
 ## Where the socket bone is relative to the skinned surface, and which way its +Y points.
 func _socket(m: Node3D, pos: PackedVector3Array, socket: String) -> String:
 	var sk: Skeleton3D = m.skeleton
@@ -304,13 +377,16 @@ func _socket(m: Node3D, pos: PackedVector3Array, socket: String) -> String:
 	var g := sk.get_bone_global_pose(b)
 	var near := INF
 	var n_close := 0
+	var n5 := 0
 	for p in pos:
 		var dd := p.distance_to(g.origin)
 		near = minf(near, dd)
 		if dd < 0.1:
 			n_close += 1
+		if dd < 0.05:
+			n5 += 1
 	var par := sk.get_bone_parent(b)
 	var par_dir := (g.origin - sk.get_bone_global_pose(par).origin).normalized()
 	var ang := rad_to_deg(g.basis.y.normalized().angle_to(par_dir))
-	return "%s: global %s, nearest skinned vertex %.3f m, %d verts within 10 cm; +Y %s (%.0f deg from parent bone %s direction); -Z %s" % [
-		socket, g.origin, near, n_close, g.basis.y.normalized(), ang, sk.get_bone_name(par), -g.basis.z.normalized()]
+	return "%s: global %s, nearest skinned vertex %.3f m, %d verts within 5 cm, %d within 10 cm; +Y %s (%.0f deg from parent bone %s direction); -Z %s" % [
+		socket, g.origin, near, n5, n_close, g.basis.y.normalized(), ang, sk.get_bone_name(par), -g.basis.z.normalized()]

@@ -18,8 +18,11 @@
 extends Node3D
 
 const ROOT := "res://assets/monsters"
-## Clip names that loop. Everything else plays once.
+## Clip names that loop. Everything else plays once and stops on its last frame (the GLBs
+## carry no loop flag; this list decides).
 const LOOPING := ["idle", "walk", "run", "move", "fly", "swim", "hover"]
+## One-shots that never hand over to settle_clip: the pose holds.
+const HOLD_LAST := ["death"]
 ## Screen-coverage switch points (fraction of viewport height), same as monster-forge's viewer.
 const LOD_COVERAGE := [0.6, 0.3, 0.12]
 
@@ -36,6 +39,9 @@ var report: Dictionary = {}         ## load diagnostics, see check_monsters.gd
 var radius := 1.0                   ## bounding-sphere radius of LOD0 (rest pose)
 var aabb := AABB()                  ## LOD0 rest-pose AABB in this node's space
 var props: Dictionary = {}          ## socket -> BoneAttachment3D
+## When a one-shot clip (hit, attack_*, breath) ends, play this one (e.g. "idle"); "" holds
+## the last frame. Clips in HOLD_LAST (death) always hold.
+var settle_clip := ""
 
 
 static func list_ids() -> PackedStringArray:
@@ -116,7 +122,13 @@ func _setup(dir: String, fov_deg: float) -> bool:
 		_add_clip(lib, dir, clip)
 	lib.add_animation("RESET", _reset_animation())
 	anim.add_animation_library("", lib)
+	anim.animation_finished.connect(_on_clip_finished)
 	return true
+
+
+func _on_clip_finished(clip: StringName) -> void:
+	if settle_clip != "" and String(clip) not in HOLD_LAST and anim.has_animation(settle_clip):
+		anim.play(settle_clip)
 
 
 ## Every bone keyed at its rest pose. Godot drops glTF channels that never leave the rest
@@ -249,8 +261,7 @@ func _add_clip(lib: AnimationLibrary, dir: String, clip: String) -> void:
 				rep["unbound"].append(String(p))
 				a.remove_track(t)
 		var key: String = clip if names.size() == 1 else "%s:%s" % [clip, n]
-		if clip in LOOPING:
-			a.loop_mode = Animation.LOOP_LINEAR
+		a.loop_mode = Animation.LOOP_LINEAR if clip in LOOPING else Animation.LOOP_NONE
 		rep["length"] = a.length
 		lib.add_animation(key, a)
 	sc.free()
@@ -301,6 +312,15 @@ func auto_lod_at(cam_pos: Vector3) -> int:
 
 func has_socket(socket: String) -> bool:
 	return skeleton.find_bone(socket) >= 0
+
+
+## Where a held prop goes for side "r" or "l": grip_<side> (non-deforming bone at the centre
+## of the fist, already in prop space) when the rig has it, else hand_<side>, else "".
+func grip_socket(side: String) -> String:
+	for s in ["grip_" + side, "hand_" + side]:
+		if has_socket(s):
+			return s
+	return ""
 
 
 ## Parents prop under a BoneAttachment3D on the socket bone. Props are built for a 1.8 m
