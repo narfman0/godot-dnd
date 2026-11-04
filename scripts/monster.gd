@@ -18,6 +18,7 @@
 extends Node3D
 
 const ROOT := "res://assets/monsters"
+const PROP_ROOT := "res://assets/props"
 ## Clip names that loop. Everything else plays once and stops on its last frame (the GLBs
 ## carry no loop flag; this list decides).
 const LOOPING := ["idle", "walk", "run", "move", "fly", "swim", "hover"]
@@ -27,6 +28,9 @@ const HOLD_LAST := ["death"]
 const LOD_COVERAGE := [0.6, 0.3, 0.12]
 
 static var last_error := ""
+## Apply the prop manifest's grip_offset on grip_* sockets (the viewer does). Off: attach
+## props as is. A switch so the lab can compare (key G); see docs/monsters.md for why.
+static var apply_grip_offset := true
 
 var id := ""
 var info: Dictionary = {}           ## monster.json
@@ -158,7 +162,7 @@ func _reset_animation() -> Animation:
 
 ## Runtime GLTFDocument textures have no mipmaps (the editor importer would add them);
 ## without them the albedo shimmers at distance.
-func _mipmap_material(mesh: Mesh) -> void:
+static func _mipmap_material(mesh: Mesh) -> void:
 	for s in mesh.get_surface_count():
 		var mat := mesh.surface_get_material(s) as BaseMaterial3D
 		if mat == null:
@@ -336,6 +340,17 @@ func attach_prop(prop: Node3D, socket: String) -> bool:
 	skeleton.add_child(ba)
 	var s: float = float(info.get("scale_m", 1.8)) / 1.8
 	prop.scale = Vector3.ONE * s
+	# manifest prop.grip_offset (rotation deg XYZ, translation m) applies on grip_* sockets
+	# only, as in monster-forge's viewer: bows, crossbows, pistols and shields turn +90 deg
+	# about X so the limbs / top rim point up and -Z (arrow, face) forward.
+	var body := prop.get_node_or_null("body") as Node3D
+	if body and apply_grip_offset and prop.has_meta("grip_offset") and socket.begins_with("grip_"):
+		var go: Dictionary = prop.get_meta("grip_offset")
+		var r: Array = go.get("rotation_deg_xyz", [0, 0, 0])
+		var t: Array = go.get("translation_m", [0, 0, 0])
+		body.transform = Transform3D(Basis.from_euler(Vector3(deg_to_rad(r[0]), deg_to_rad(r[1]), deg_to_rad(r[2])), EULER_ORDER_XYZ), Vector3(t[0], t[1], t[2]))
+	if prop.has_meta("lod_meshes"):
+		_set_ranges(prop.get_meta("lod_meshes"), float(prop.get_meta("lod_radius")) * s, float(prop.get_meta("fov")))
 	ba.add_child(prop)
 	props[socket] = ba
 	return true
@@ -350,6 +365,85 @@ func detach_prop(socket: String) -> void:
 func set_props_visible(v: bool) -> void:
 	for ba in props.values():
 		ba.visible = v
+
+
+## Distances at which LOD k+1 takes over, from the viewer's screen-coverage thresholds.
+static func _ranges(r: float, fov_deg: float) -> Array[float]:
+	var out: Array[float] = []
+	var t := tan(deg_to_rad(fov_deg) * 0.5)
+	for c in LOD_COVERAGE:
+		out.append(r / sin(atan(c * t)))
+	return out
+
+
+static func _set_ranges(meshes: Array, r: float, fov_deg: float) -> void:
+	var rg := _ranges(r, fov_deg)
+	for i in meshes.size():
+		var mi: MeshInstance3D = meshes[i]
+		mi.visibility_range_begin = 0.0 if i == 0 else rg[mini(i - 1, rg.size() - 1)]
+		mi.visibility_range_end = 0.0 if i == meshes.size() - 1 else rg[mini(i, rg.size() - 1)]
+
+
+## Real prop from assets/props/<id>/ (tools/sync_monsters.py), already in prop space: origin
+## at the grip, +Y to the tip, -Z the edge / arrow / shield face, metres for a 1.8 m wielder.
+##   prop (meta: prop_id, manifest, grip_offset, offhand_grip)
+##     body                 grip_offset goes here (attach_prop, grip_* sockets only)
+##       model              GLTFDocument scene of model.glb; two-handed props keep their
+##                          "offhand_grip" node (the off hand's IK target)
+##         <mesh>, lod1..3  LOD files share LOD0's material, switched by visibility range
+## Returns null (see last_error) when the prop is not synced.
+static func load_prop(prop_id: String, fov_deg := 50.0) -> Node3D:
+	var dir := "%s/%s" % [PROP_ROOT, prop_id]
+	var man = JSON.parse_string(FileAccess.get_file_as_string(dir + "/manifest.json"))
+	if not man is Dictionary:
+		last_error = "%s/manifest.json missing or invalid" % dir
+		return null
+	var model := _gltf_scene(dir + "/model.glb")
+	if model == null:
+		return null
+	var meshes := model.find_children("*", "MeshInstance3D", true, false)
+	if meshes.size() != 1:
+		last_error = "%s: expected 1 mesh in model.glb, found %d" % [prop_id, meshes.size()]
+		model.free()
+		return null
+	var lod0: MeshInstance3D = meshes[0]
+	_mipmap_material(lod0.mesh)
+	var lod_meshes: Array = [lod0]
+	var k := 1
+	while FileAccess.file_exists("%s/model_lod%d.glb" % [dir, k]):
+		var sc := _gltf_scene("%s/model_lod%d.glb" % [dir, k])
+		var src: Array = []
+		if sc:
+			src = sc.find_children("*", "MeshInstance3D", true, false)
+		if src.size() == 1:
+			var mi := MeshInstance3D.new()
+			mi.name = "lod%d" % k
+			mi.mesh = src[0].mesh
+			mi.transform = lod0.transform
+			for si in mi.mesh.get_surface_count():
+				mi.set_surface_override_material(si, lod0.mesh.surface_get_material(mini(si, lod0.mesh.get_surface_count() - 1)))
+			lod0.get_parent().add_child(mi)
+			lod_meshes.append(mi)
+		if sc:
+			sc.free()
+		k += 1
+	var p := Node3D.new()
+	p.name = "prop_" + prop_id
+	var body := Node3D.new()
+	body.name = "body"
+	p.add_child(body)
+	model.name = "model"
+	body.add_child(model)
+	var pm: Dictionary = man.get("prop", {})
+	p.set_meta("prop_id", prop_id)
+	p.set_meta("manifest", man)
+	p.set_meta("grip_offset", pm.get("grip_offset", {}))
+	p.set_meta("offhand_grip", pm.get("offhand_grip"))
+	p.set_meta("lod_meshes", lod_meshes)
+	p.set_meta("lod_radius", lod0.mesh.get_aabb().size.length() * 0.5)
+	p.set_meta("fov", fov_deg)
+	_set_ranges(lod_meshes, lod0.mesh.get_aabb().size.length() * 0.5, fov_deg)
+	return p
 
 
 static func _box(size: Vector3, pos: Vector3, color: Color, metal := 0.0) -> MeshInstance3D:

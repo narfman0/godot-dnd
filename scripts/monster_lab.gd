@@ -9,8 +9,6 @@ extends Node3D
 
 const Monster = preload("res://scripts/monster.gd")
 ## Props per monster; any other monster with a hand_r socket gets the sword.
-## Values are sides: "r" -> grip_r (or hand_r when the rig has no grip bones).
-const LOADOUT := {"goblin-warrior": {"r": "sword", "l": "bow"}}
 const FOV := 50.0
 
 var monster: Node3D
@@ -182,7 +180,7 @@ func _build_ui() -> void:
 	_status.add_theme_font_size_override("font_size", 12)
 	box.add_child(_status)
 	var help := Label.new()
-	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · F frame"
+	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · G grip_offset · F frame"
 	help.add_theme_font_size_override("font_size", 11)
 	box.add_child(help)
 
@@ -199,12 +197,16 @@ func select_monster(id: String) -> void:
 	add_child(m)
 	_ui_monster.select(ids.find(id))
 	m.settle_clip = "idle"   # hit / attacks go back to idle; death holds its last frame
-	var loadout: Dictionary = LOADOUT.get(id, {"r": "sword"})
+	var loadout := loadout_for(m)
 	for side in loadout:
 		var socket: String = m.grip_socket(side)
 		if socket == "":
 			continue
-		var prop: Node3D = Monster.make_sword() if loadout[side] == "sword" else Monster.make_bow()
+		var prop: Node3D = Monster.load_prop(loadout[side], FOV)
+		if prop == null:   # not synced: CSG placeholder in the same prop space
+			push_warning("prop %s: %s, using a placeholder" % [loadout[side], Monster.last_error])
+			var cat: String = _prop_category(loadout[side])
+			prop = Monster.make_bow() if cat in ["bow", "crossbow"] else Monster.make_sword()
 		m.attach_prop(prop, socket)
 	m.set_props_visible(show_props)
 	_figure.position = Vector3(m.aabb.position.x - 0.6, 0, 0)
@@ -216,6 +218,40 @@ func select_monster(id: String) -> void:
 	select_clip(start)
 	set_lod_mode(m.lod_mode)
 	frame()
+
+
+## Which wielded prop goes in which hand, from monster.json "wields" (registry) and each
+## prop's manifest (category, grip, grip_socket): the first prop whose grip_socket is
+## hand_r goes on the right, the first on hand_l (bows) on the left. A shield takes the
+## left hand only when no bow/two-hander needs it. Stowed gear (back, hips) is not shown.
+## Returns {"r": prop_id, "l": prop_id}.
+static func loadout_for(m: Node3D) -> Dictionary:
+	var out := {}
+	var two_handed := false
+	for w in m.info.get("wields", []):
+		var pm := _prop_manifest(w)
+		if pm.get("category", "") == "shield":
+			continue
+		var side := "l" if pm.get("grip_socket", "hand_r") == "hand_l" else "r"
+		if out.has(side):
+			continue
+		out[side] = w
+		if int(pm.get("grip", 1)) == 2:
+			two_handed = true
+	if m.info.get("shield", false) and not out.has("l") and not two_handed:
+		out["l"] = "shield"
+	if two_handed:
+		out.erase("l")
+	return out
+
+
+static func _prop_manifest(prop_id: String) -> Dictionary:
+	var man = JSON.parse_string(FileAccess.get_file_as_string("%s/%s/manifest.json" % [Monster.PROP_ROOT, prop_id]))
+	return man if man is Dictionary else {}
+
+
+static func _prop_category(prop_id: String) -> String:
+	return str(_prop_manifest(prop_id).get("category", ""))
 
 
 func select_clip(clip: String) -> void:
@@ -333,6 +369,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 				set_props_visible(not show_props)
 			KEY_F:
 				frame()
+			KEY_G:
+				Monster.apply_grip_offset = not Monster.apply_grip_offset
+				select_monster(monster.id)
 			KEY_LEFT:
 				cam_yaw += 0.15
 			KEY_RIGHT:

@@ -5,6 +5,7 @@
 extends SceneTree
 
 const Monster = preload("res://scripts/monster.gd")
+const Lab = preload("res://scripts/monster_lab.gd")
 
 var _fail := 0
 
@@ -29,11 +30,14 @@ func _initialize() -> void:
 		root.add_child(m)
 		await process_frame
 		rows.append(await _row(m, details))
+		details.append(await _loadout(m))
 		m.queue_free()
 		await process_frame
 	print("\n".join(rows))
 	print("")
 	print("\n".join(details))
+	print("")
+	await _props()
 	print("ALL PASS" if _fail == 0 else "FAIL (%d)" % _fail)
 	quit(1 if _fail else 0)
 
@@ -390,3 +394,75 @@ func _socket(m: Node3D, pos: PackedVector3Array, socket: String) -> String:
 	var ang := rad_to_deg(g.basis.y.normalized().angle_to(par_dir))
 	return "%s: global %s, nearest skinned vertex %.3f m, %d verts within 5 cm, %d within 10 cm; +Y %s (%.0f deg from parent bone %s direction); -Z %s" % [
 		socket, g.origin, near, n5, n_close, g.basis.y.normalized(), ang, sk.get_bone_name(par), -g.basis.z.normalized()]
+
+
+## Every synced prop loads; its LODs share LOD0's material; size matches length_check.
+func _props() -> void:
+	var d := DirAccess.open(Monster.PROP_ROOT)
+	if d == null:
+		print("no props synced")
+		return
+	var rows := ["| prop | LODs (tris) | AABB x,y,z m | length_check m | grip_offset deg | offhand_grip node |", "|---|---|---|---|---|---|"]
+	for pid in d.get_directories():
+		var p: Node3D = Monster.load_prop(pid)
+		if p == null:
+			_check(false, "prop %s: %s" % [pid, Monster.last_error])
+			continue
+		var meshes: Array = p.get_meta("lod_meshes")
+		var tris := []
+		for mi in meshes:
+			tris.append(str(mi.mesh.surface_get_array_index_len(0) / 3))
+			_check(mi.get_active_material(0) == meshes[0].mesh.surface_get_material(0), "prop %s %s: not LOD0's material" % [pid, mi.name])
+		var bb: AABB = meshes[0].mesh.get_aabb()
+		var pm: Dictionary = p.get_meta("manifest").get("prop", {})
+		var lc: Dictionary = pm.get("length_check", {})
+		var ax := String(lc.get("axis", "+Y"))
+		var meas := bb.size.y
+		if ax.ends_with("Z"):
+			meas = bb.size.z
+		elif ax.begins_with("max"):
+			meas = maxf(bb.size.x, bb.size.y)
+		_check(absf(meas - float(lc.get("target_m", meas))) < 0.02, "prop %s: length %.3f, target %s" % [pid, meas, lc.get("target_m")])
+		_check(bb.has_point(Vector3.ZERO) or bb.grow(0.01).has_point(Vector3.ZERO), "prop %s: origin (grip) outside the mesh bounds" % pid)
+		var oh = p.find_child("offhand_grip", true, false)
+		if pm.get("offhand_grip") != null:
+			_check(oh != null, "prop %s: manifest has offhand_grip but model.glb has no such node" % pid)
+		rows.append("| %s | %d (%s) | %.2f, %.2f, %.2f | %s %.2f | %s | %s |" % [pid, meshes.size(), "/".join(tris), bb.size.x, bb.size.y, bb.size.z, ax, meas,
+			p.get_meta("grip_offset").get("rotation_deg_xyz", "-"), ("%s" % (oh as Node3D).position) if oh else "-"])
+		p.free()
+	print("\n".join(rows))
+
+
+## The lab's loadout, attached as the lab does it, sampled mid-clip: where the prop's tip
+## (+Y) and edge/arrow (-Z) point in the world.
+func _loadout(m: Node3D) -> String:
+	var lo: Dictionary = Lab.loadout_for(m)
+	if lo.is_empty():
+		return "  loadout: none (wields %s)" % [m.info.get("wields", [])]
+	var out := ["  loadout: %s (wields %s, shield %s)" % [lo, m.info.get("wields", []), m.info.get("shield", false)]]
+	for side in lo:
+		var sock: String = m.grip_socket(side)
+		var p: Node3D = Monster.load_prop(lo[side])
+		_check(p != null, "%s: prop %s does not load" % [m.id, lo[side]])
+		if p == null or sock == "":
+			continue
+		m.attach_prop(p, sock)
+	await process_frame
+	for clip in ["idle", "attack_melee", "attack_ranged"]:
+		if not clip in m.clips():
+			continue
+		m.play(clip)
+		m.anim.seek(m.anim.get_animation(clip).length * 0.5, true)
+		await process_frame
+		for side in lo:
+			var ba: Node3D = m.props.get(m.grip_socket(side))
+			if ba == null:
+				continue
+			var body := (ba.get_child(0) as Node3D).get_node("body") as Node3D
+			var g := body.global_transform
+			out.append("    %s @50%% %s on %s: grip %s, tip (+Y) %s, edge/arrow (-Z) %s, scale %.3f" % [clip, lo[side], m.grip_socket(side),
+				g.origin, g.basis.y.normalized(), -g.basis.z.normalized(), g.basis.y.length()])
+	for side in lo:
+		m.detach_prop(m.grip_socket(side))
+	m.play("rest")
+	return "\n".join(out)
