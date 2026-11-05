@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy rigged monsters and their props from monster-forge into assets/ (stdlib only).
 
-    python3 -I tools/sync_monsters.py --all                 # every rigged monster + every prop
+    python3 -I tools/sync_monsters.py --all                 # every rigged monster with clips + every prop
     python3 -I tools/sync_monsters.py --ids wolf harpy      # these monsters + the props they wield
     python3 -I tools/sync_monsters.py --props               # every prop (or --props scimitar shield)
     python3 -I tools/sync_monsters.py --all --forge ~/workspace/monster-forge --source srd-5.2.1
@@ -12,7 +12,8 @@ writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lod
 wields / shield from data/registry/<source>.json). Props (out/props/<id>/, already in prop
 space) go to assets/props/<id>/: model.glb, model_lod<k>.glb, lods.json, manifest.json.
 Never model_hi.glb, model_raw.glb, PNGs or paint/. Idempotent: files are compared by content, unchanged files are
-left alone, files the source no longer has are removed. Monsters without a rig are skipped.
+left alone, files the source no longer has are removed. Monsters without a rig are skipped,
+and --all also skips rigged monsters that have no clips yet.
 See docs/monsters.md.
 """
 import argparse
@@ -169,7 +170,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--ids", nargs="+", metavar="ID", help="these monsters and the props they wield")
-    g.add_argument("--all", action="store_true", help="every monster with model_rigged.glb, every prop")
+    g.add_argument("--all", action="store_true", help="every monster with model_rigged.glb and clips, every prop")
     g.add_argument("--props", nargs="*", metavar="PROP", help="props only (all when no id is given)")
     ap.add_argument("--forge", type=Path, default=DEFAULT_FORGE, help="monster-forge checkout")
     ap.add_argument("--source", default="srd-5.2.1")
@@ -187,7 +188,14 @@ def main() -> int:
     if not out.is_dir():
         print(f"no such directory: {out}", file=sys.stderr)
         return 2
-    ids = a.ids or sorted(p.name for p in out.iterdir() if (p / "model_rigged.glb").exists())
+    # --all: every rigged monster that also has clips (a rig without anims/ is still being
+    # made, e.g. centaur-trooper in round 4; --ids syncs it anyway).
+    ids = a.ids or sorted(p.name for p in out.iterdir()
+                          if (p / "model_rigged.glb").exists() and any((p / "anims").glob("*.glb")))
+    if a.all:
+        for p in sorted(out.iterdir()):
+            if (p / "model_rigged.glb").exists() and p.name not in ids:
+                print(f"{p.name}: skipped (rigged, no anims/*.glb clips yet)")
     if a.all and a.dest.is_dir():
         for p in sorted(a.dest.iterdir()):
             if (p / "monster.json").exists() and p.name not in ids:

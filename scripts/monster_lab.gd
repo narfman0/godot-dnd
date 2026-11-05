@@ -197,10 +197,12 @@ func select_monster(id: String) -> void:
 	add_child(m)
 	_ui_monster.select(ids.find(id))
 	m.settle_clip = "idle"   # hit / attacks go back to idle; death holds its last frame
+	m.blend_time = 0.25      # cross-fade clip switches (no height pop from idle on the floor to a hover clip)
 	var loadout := loadout_for(m)
 	for side in loadout:
 		var socket: String = m.grip_socket(side)
-		if socket == "":
+		if socket == "":   # e.g. merfolk-skirmisher: wields a spear, the rig has no hand_r
+			push_warning("%s: no grip_%s / hand_%s bone, %s not shown" % [id, side, side, loadout[side]])
 			continue
 		var prop: Node3D = Monster.load_prop(loadout[side], FOV)
 		if prop == null:   # not synced: CSG placeholder in the same prop space
@@ -214,7 +216,9 @@ func select_monster(id: String) -> void:
 	_ui_clip.add_item("rest")
 	for c in m.clips():
 		_ui_clip.add_item(c)
-	var start: String = "walk" if "walk" in m.clips() else ("rest" if m.clips().is_empty() else m.clips()[0])
+	var start: String = m.move_clip()   # walk, else swim / fly (legless and flying plans)
+	if start == "":
+		start = "rest" if m.clips().is_empty() else m.clips()[0]
 	select_clip(start)
 	set_lod_mode(m.lod_mode)
 	frame()
@@ -293,7 +297,8 @@ func _process(_delta: float) -> void:
 	_draw_skeleton()
 	if monster:
 		var drawn: int = monster.auto_lod_at(_camera.global_position) if monster.lod_mode < 0 else monster.lod_mode
-		var clip: String = monster.anim.current_animation if monster.anim.is_playing() else "rest"
+		var clip: String = monster.anim.current_animation if monster.anim.is_playing() else (
+				"rest" if monster.current_clip == "" else monster.current_clip + " (last frame)")
 		_status.text = "%s  %s  scale_m %s\nbones %d  clip %s %s\nLOD%d drawn (%s)  %d tris\ncamera %.1f m  switch at %s m" % [
 			monster.info["name"], monster.info.get("body_plan", ""), monster.info.get("scale_m"),
 			monster.skeleton.get_bone_count(), clip, "" if not monster.anim.is_playing() or monster.anim.speed_scale > 0 else "(paused)",

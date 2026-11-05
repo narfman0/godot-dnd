@@ -1,8 +1,9 @@
 ## Screenshots of the monster lab, one PNG per monster, clip, time and view. Needs a display;
 ## headless servers: xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan ...
-##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|all|idle,hit]
+##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|move|all|idle,hit]
 ##         [ts=0.5|0.3,0.5,0.7] [views=three,front,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
 ##         [gripoffset=0] [tag=_suffix]
+## clips=move is the monster's locomotion clip: walk, else swim / fly (Monster.move_clip).
 ## Views: three (3/4 front), front (camera on -Z looking +Z), side (camera on +X), top,
 ## hand_*/grip_* (close-up on that socket with skeleton and socket axes; skipped when the
 ## rig lacks it), lods (LOD0..3 at the same frame). The clip is paused at each t (fraction
@@ -36,8 +37,11 @@ func _initialize() -> void:
 		if m == null:
 			push_error("cannot load " + id)
 			continue
+		m.blend_time = 0.0   # each shot seeks a paused clip: no cross-fade from the previous one
 		var clips: PackedStringArray = m.clips() if opt["clips"] == "all" else opt["clips"].split(",")
 		for clip in clips:
+			if clip == "move":   # alias: walk, else swim / fly (Monster.move_clip)
+				clip = m.move_clip()
 			if clip != "rest" and not clip in m.clips():
 				continue
 			for ts in opt["ts"].split(","):

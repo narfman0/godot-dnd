@@ -32,7 +32,8 @@ Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
 `model_lod<k>.glb`, `lods.json` and `manifest.json` (copied whole; the game reads
 `category`, `grip`, `grip_socket`, `stow_socket` and `prop.grip_offset` /
 `prop.offhand_grip`).
-- `--all` syncs every rigged monster and every prop.
+- `--all` syncs every rigged monster that has clips (`anims/*.glb`) and every prop. A rig
+  without clips yet (centaur-trooper in round 4) is listed as skipped; `--ids` syncs it anyway.
 - `--ids a b` syncs those monsters and the props they wield.
 - `--props [id ...]` syncs props only, all of them when no id is given.
 
@@ -82,7 +83,8 @@ same way as `*.json`, so the raw GLBs ship. This has not been tested with an exp
 
 ## The export contract, as verified in Godot 4.7.1
 
-Measured by `tools/check_monsters.gd` and screenshots on the six pilots (2026-11-04).
+Measured by `tools/check_monsters.gd` and screenshots on the six pilots (2026-11-04), and
+again on the nine body-plan pilots in round 4 (below).
 
 | contract | result |
 |---|---|
@@ -107,11 +109,100 @@ Round 3 run (2026-11-04, after `sync_monsters.py --all`), tracks bound / total p
 | wolf | 28 | attack_melee 21/21, death 23/23, hit 21/21, idle 22/22, walk 18/18 | -0.001 (bone_16) |
 | young-red-dragon | 67 | attack_melee 32/32, breath 26/26, death 26/26, fly 30/30, hit 34/34, idle 36/36, walk 26/26 | -0.000 (bone_20) |
 
+Round 4 (2026-11-04): the nine body-plan pilots (monster-forge `docs/rig-anim.md`, "Body
+plans"; centaur-trooper has no clips yet and is skipped). `check_monsters.gd` passes on all
+15 monsters: every clip binds 100% of its tracks, every rig has 4 LODs on one `Skeleton3D`
+with LOD0's skin, every loop's first and last frames match (seam 0.0000 m), every one-shot
+stops on its last frame and death holds it.
+
+| id | plan | bones | clips (bound/total) | move clip | lowest y over the move clip | death ends at y |
+|---|---|---|---|---|---|---|
+| constrictor-snake | serpentine | 16 | attack_melee 5/5, death 15/15, hit 15/15, idle 15/15, swim 15/15, walk 15/15 | walk | 0.000 (contact) | 0.000 |
+| ghost | floating | 37 | attack_melee 12/12, death 13/13, fly 10/10, hit 13/13, idle 14/14 | fly | 0.178 (lift) | 0.000 |
+| giant-eagle | avian | 32 | attack_melee 17/17, death 19/19, fly 17/17, hit 17/17, idle 16/16 | fly | 0.320 (hover) | 0.000 |
+| black-pudding | amorphous | 4 | attack_melee 5/5, death 4/4, hit 4/4, idle 4/4, walk 4/4 | walk | 0.000 (contact) | 0.000 |
+| violet-fungus | plant_object | 5 | attack_melee 4/4, death 6/6, hit 4/4, idle 4/4, walk 5/5 | walk | 0.000 (contact) | 0.000 |
+| giant-octopus | tentacled | 42 | attack_melee 13/13, death 43/43, hit 43/43, idle 43/43, swim 42/42 | swim | 0.215 (lift) | 0.000 |
+| hunter-shark | aquatic | 32 | attack_melee 13/13, death 14/14, hit 13/13, idle 13/13, swim 13/13 | swim | 0.718 (lift) | 0.000 |
+| merfolk-skirmisher | merfolk_naga | 57 | attack_melee 17/17, attack_ranged 17/17, death 12/12, hit 17/17, idle 16/16, swim 13/13 | swim | 0.423 (lift) | 0.000 |
+| swarm-of-rats | swarm | 1 | attack_melee 2/2, death 1/1, hit 2/2, idle 2/2, walk 2/2 | walk | 0.000 (contact) | 0.000 |
+
+What round 4 checks, beyond rounds 1-3 (all in `check_monsters.gd`, per monster):
+- **Every GLB channel that moves becomes a track.** The check reads each clip GLB's own
+  channels and finds no channel that leaves the node's rest value without a Godot track
+  of that type on that bone. Scale included: the blob (black-pudding root
+  `spine_00`, every clip), the swarm (`root`, every clip), the octopus (root: idle, hit,
+  death) and the fungus walk carry scale tracks, and seeking to the key furthest from 1
+  gives the bone exactly that pose scale (pudding death: (1.57, 0.22, 1.57)). Godot needs
+  nothing special for scale: the runtime `GLTFDocument` imports `scale` channels as
+  `TYPE_SCALE_3D` tracks, and the RESET animation keys rest scale.
+- **Ground per clip** (CPU skinning of LOD0 at 13 frames): lowest vertex at the first
+  frame, the minimum over the clip and the last frame. No clip of any of the 15 monsters
+  goes more than 3 cm below y = 0 (worst: young-red-dragon attack_melee -0.022, ghost hit
+  -0.010, eagle hit -0.019). Every death ends with its lowest point at y = 0.000.
+- **Hover height across clips.** The lift plans keep one height: hunter-shark starts
+  every clip but death at 0.744 m, the ghost at 0.18-0.25 m (the hem moves; root y
+  1.09-1.19 m in every clip). The ghost's hit clip dips the hem to -0.010 m for a moment.
+  Three monsters change height on purpose between idle and the move clip: the octopus
+  (idle on the ground, swim at 0.215 m), the merfolk (idle stands on its tail, swim at
+  0.65 m) and the eagle (idle stands, fly at 0.41 m), like the harpy and dragon fly.
+- **Clip switches pop without a cross-fade.** Measured at 30 fps, idle -> move clip in
+  one frame moves some vertex by 0.14-1.31 m (eagle 1.31, merfolk 1.18, snake 0.80,
+  ghost 0.74). With `Monster.blend_time = 0.25` the largest step is 0.03-0.26 m, about
+  the size of a normal frame inside the clip (0.02-0.20 m). The lab now cross-fades
+  0.25 s; the screenshot tool and the check use 0 (they seek paused clips).
+- **Missing hand.** merfolk-skirmisher wields a spear (registry) but its rig has `hand_l` /
+  `grip_l` only (the raised right arm was not found). `loadout_for` puts the spear on the
+  right, `grip_socket("r")` is `""`, the lab skips it with a warning, and
+  `attach_prop(prop, "hand_r")` returns false and frees the prop. Nothing is attached and
+  nothing crashes.
+- **One bone.** swarm-of-rats: 1 bone (`root`). All 4 LODs load on that skeleton with
+  LOD0's skin, all five clips play, and the LOD screenshots at walk 30% show the same
+  pose on LOD0-3. The check's LOD-follow probe runs mid-walk, which is exactly the rest
+  pose for this clip, so its 0.0000 m says nothing here. With one bone and every weight 1
+  there is nothing to disagree on. Idle and walk are at rest mid-cycle, so the "bones
+  moved" probe samples them at 30%.
+
+Screenshots (`lab_screenshot.gd clips=move ts=0.25,0.75` and `clips=death ts=0.5,1.0`,
+views three and side), what they show:
+- **constrictor-snake:** walk slithers with the head end reared; coils stay on the floor.
+  Death: the front slumps and the head lies on the ground. Nothing in the floor.
+- **ghost:** fly floats with the hem about 0.2 m up, robe trailing behind. Death falls
+  forward flat onto the floor. At the last frame the back of the robe stays upright: a
+  thin vertical sheet about 0.9 m high at the hem end while the body lies flat (side view).
+  Looks like hem vertices weighted to bones the death clip does not rotate.
+- **giant-eagle:** fly flaps with the talons hanging about 0.3-0.4 m above the floor.
+  Death lands on its breast, wings spread flat, tail fan up. The lab frames the rest
+  pose, so the dead eagle (which pitches forward) is partly out of frame.
+- **black-pudding:** walk is a subtle ooze. Death flattens into a wide puddle (scale
+  plays). No stretched skin beyond the intended squash.
+- **violet-fungus:** walk rocks the stalk with the base planted. Death topples to its
+  right (+X). The root clump turns with it and stands up vertically, as a rigid body.
+- **giant-octopus:** swim lifts it with all tentacles curling; death splays flat on the
+  floor. LOD0-3 at the same frame match.
+- **hunter-shark:** swims level at 0.72-0.74 m. Death rolls belly-up and lies on the
+  floor on its dorsal fin, pectoral fins up. The rest mesh is strongly curved (tail bent
+  down, bbox 2.97 m tall for a 4.5 m shark).
+- **merfolk-skirmisher:** swim pitches the body forward and kicks the tail, about 0.4-0.65 m
+  up. Death topples onto its right side with the raised right arm sticking up into the air.
+  attack_melee barely moves the arms, which are spread out in the rest pose. No prop is
+  shown anywhere (above).
+- **swarm-of-rats:** the mesh is a 1.44 m column of rats rather than a spread swarm. Walk
+  is a small scurry. Death squashes the whole column to 15% height, so the rats are
+  flattened.
+- No monster in round 4 has a prop, and no prop appears on them.
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
 Tracks whose bone is missing are dropped and counted (`report.clips[clip].unbound`).
 None were dropped on the pilots.
+
+`Monster.move_clip()` is the locomotion clip: `walk`, else the first of `run`, `move`,
+`swim`, `fly`, `hover` that the monster has (`MOVE_CLIPS`). The lab starts on it, and
+`lab_screenshot.gd clips=move` shoots it. `Monster.blend_time` (default 0) cross-fades
+`play()` and the settle hand-over; the lab sets 0.25 s. `Monster.current_clip` is the
+clip `play()` last started; the lab HUD shows "death (last frame)" for a held one-shot.
 
 Loop modes come from a name list, `Monster.LOOPING` (`idle`, `walk`, `run`, `move`, `fly`,
 `swim`, `hover`), not from the GLB, which has no loop flag. Every other clip (`hit`,
@@ -282,5 +373,13 @@ distances.
   the wrist, 2.3 cm from the surface.
 - LOD files name their material `Material_0.001` rather than LOD0's `Material_0`
   (`docs/lods.md` says same name). Harmless here, because the material is overridden.
+- Round 4 (body-plan pilots), reported upstream in monster-forge `docs/TODO.md` E:
+  - The ghost's robe hem stays upright as a vertical sheet at the end of death.
+  - The merfolk has no right arm socket, so its spear is never shown, and its
+    attack_melee barely moves.
+  - The swarm mesh is a 1.44 m column of rats, and death squashes them flat.
+  - The violet fungus topples with its root clump.
+  - The octopus, merfolk and eagle change height between idle and swim/fly by design.
+    The game cross-fades (`blend_time`) or adds a take-off.
 - With `--verbose`, Godot warns "Buffer view byte stride should be declared for vertex
   attributes". There are no warnings without `--verbose`.

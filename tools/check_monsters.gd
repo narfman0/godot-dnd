@@ -8,6 +8,7 @@ const Monster = preload("res://scripts/monster.gd")
 const Lab = preload("res://scripts/monster_lab.gd")
 
 var _fail := 0
+var _warns: Array[String] = []
 
 
 func _initialize() -> void:
@@ -19,7 +20,7 @@ func _initialize() -> void:
 		quit(1)
 		return
 	var rows: Array[String] = []
-	rows.append("| id | bones | LOD meshes (tris) | clips | tracks bound/total | rest AABB x,y,z m | scale_m | lowest y rest / walk (bone) | upper-mass end dz |")
+	rows.append("| id | bones | LOD meshes (tris) | clips | tracks bound/total | rest AABB x,y,z m | scale_m | lowest y rest / move clip (bone) | upper-mass end dz |")
 	rows.append("|---|---|---|---|---|---|---|---|---|")
 	var details: Array[String] = []
 	for id in ids:
@@ -38,8 +39,18 @@ func _initialize() -> void:
 	print("\n".join(details))
 	print("")
 	await _props()
+	print("")
+	print("WARN (%d):" % _warns.size())
+	for w in _warns:
+		print("  " + w)
 	print("ALL PASS" if _fail == 0 else "FAIL (%d)" % _fail)
 	quit(1 if _fail else 0)
+
+
+## Pipeline findings that do not break loading (geometry in the floor, pops between clips):
+## listed at the end, not counted as failures.
+func _warn(what: String) -> void:
+	_warns.append(what)
 
 
 func _check(ok: bool, what: String) -> void:
@@ -88,13 +99,16 @@ func _row(m: Node3D, details: Array[String]) -> String:
 	var walk_low := "-"
 	var clips: PackedStringArray = m.clips()
 	if clips.size():
-		var clip := "walk" if "walk" in clips else clips[0]
+		var clip: String = m.move_clip()   # walk, else swim / fly
+		if clip == "":
+			clip = clips[0]
 		var a: Animation = m.anim.get_animation(clip)
 		m.play(clip)
 		var root_start := Vector3.ZERO
 		var low := INF
 		var low_bone := ""
 		var moved := 0
+		var moved_any := 0   # a one-bone swarm can sit at rest exactly mid-cycle
 		var n := 8
 		for i in n + 1:
 			var t := a.length * i / n
@@ -106,12 +120,14 @@ func _row(m: Node3D, details: Array[String]) -> String:
 				low_bone = _dominant_bone(m, lo)
 			if i == 0:
 				root_start = sk.get_bone_global_pose(0).origin
+			for b in sk.get_bone_count():
+				if _pose_dev(sk, b) > 0.1:
+					moved_any += 1
 			if i == n / 2:
 				for b in sk.get_bone_count():
 					if _pose_dev(sk, b) > 0.1:
 						moved += 1
 				d.append("  %s @ %.2fs: %d/%d bones posed off rest" % [clip, t, moved, sk.get_bone_count()])
-				_check(moved > 0, "%s/%s: no bone moved" % [m.id, clip])
 				for k in range(1, m.lods.size()):
 					var fd := _follow_dev(m, pos, k)
 					d.append("    LOD%d follows the skeleton: vertex displacement vs nearest LOD0 vertex, median %.4f m, p95 %.4f m (LOD0 displacement p95 %.3f m)" % [k, fd[0], fd[1], fd[2]])
@@ -119,15 +135,18 @@ func _row(m: Node3D, details: Array[String]) -> String:
 				for so in ["hand_r", "hand_l", "grip_r", "grip_l"]:
 					if m.has_socket(so):
 						d.append("  " + _socket(m, pos, so))
+		_check(moved_any > 0, "%s/%s: no bone moved" % [m.id, clip])
 		var root_end := sk.get_bone_global_pose(0).origin
 		d.append("  %s: root bone travels %s over the clip (in place if ~0); %.2fs %s" % [clip, root_end - root_start, a.length, ["once", "loop", "pingpong"][a.loop_mode]])
-		walk_low = "%.3f (%s)" % [low, low_bone]
+		walk_low = "%.3f %s (%s)" % [low, clip, low_bone]
 		# Every clip plays a frame and moves bones.
 		var per_clip := []
 		for c in clips:
 			m.play(c)
 			m.anim.seek(m.anim.get_animation(c).length * 0.5, true)
 			var mv := 0
+			if c in ["idle", "walk"] and sk.get_bone_count() == 1:
+				m.anim.seek(m.anim.get_animation(c).length * 0.3, true)   # one bone: mid-cycle can be rest
 			for b in sk.get_bone_count():
 				if _pose_dev(sk, b) > 0.1:
 					mv += 1
@@ -135,6 +154,9 @@ func _row(m: Node3D, details: Array[String]) -> String:
 			_check(mv > 0, "%s/%s: no bone moved" % [m.id, c])
 		d.append("  played mid-clip: " + ", ".join(per_clip))
 		d.append(await _playback(m))
+		d.append(_ground(m))
+		d.append(await _transition(m))
+		d.append(_channels(m))
 		for side in ["r", "l"]:
 			var g: String = "grip_" + side
 			if not m.has_socket(g):
@@ -207,12 +229,14 @@ func _skinned(m: Node3D, mi: MeshInstance3D, rest: bool) -> PackedVector3Array:
 	return out
 
 
-## Degrees between a bone's pose and its rest (rotation; position error counted per cm).
+## Degrees between a bone's pose and its rest (rotation; position error counted per cm,
+## scale error per 0.01).
 func _pose_dev(sk: Skeleton3D, b: int) -> float:
 	var p := sk.get_bone_pose(b)
 	var r := sk.get_bone_rest(b)
 	var ang := rad_to_deg(p.basis.get_rotation_quaternion().angle_to(r.basis.get_rotation_quaternion()))
-	return maxf(ang, p.origin.distance_to(r.origin) * 100.0)
+	# scale (blob squash and stretch, swarm): 0.01 scale counts like 1 deg
+	return maxf(maxf(ang, p.origin.distance_to(r.origin) * 100.0), (p.basis.get_scale() - r.basis.get_scale()).length() * 100.0)
 
 
 func _lowest(pts: PackedVector3Array) -> int:
@@ -371,6 +395,7 @@ func _pose_diff(sk: Skeleton3D, p: Array) -> float:
 		var q: Transform3D = sk.get_bone_pose(b)
 		worst = maxf(worst, rad_to_deg(q.basis.get_rotation_quaternion().angle_to((p[b] as Transform3D).basis.get_rotation_quaternion())))
 		worst = maxf(worst, q.origin.distance_to((p[b] as Transform3D).origin) * 100.0)
+		worst = maxf(worst, (q.basis.get_scale() - (p[b] as Transform3D).basis.get_scale()).length() * 100.0)
 	return worst
 
 
@@ -444,7 +469,14 @@ func _loadout(m: Node3D) -> String:
 		var sock: String = m.grip_socket(side)
 		var p: Node3D = Monster.load_prop(lo[side])
 		_check(p != null, "%s: prop %s does not load" % [m.id, lo[side]])
-		if p == null or sock == "":
+		if p != null and sock == "":
+			# e.g. merfolk-skirmisher: a spear for the right hand, no hand_r bone. attach_prop
+			# must refuse a missing bone (and free the prop) rather than attach anywhere.
+			_check(not m.attach_prop(p, "hand_" + side) and m.props.is_empty(), "%s: attach_prop accepted missing bone hand_%s" % [m.id, side])
+			out.append("    %s: no grip_%s / hand_%s bone, %s not attached (attach_prop refuses: ok)" % [m.id, side, side, lo[side]])
+			_warn("%s wields %s but has no grip_%s / hand_%s socket: not shown" % [m.id, lo[side], side, side])
+			continue
+		if p == null:
 			continue
 		m.attach_prop(p, sock)
 	await process_frame
@@ -466,3 +498,195 @@ func _loadout(m: Node3D) -> String:
 		m.detach_prop(m.grip_socket(side))
 	m.play("rest")
 	return "\n".join(out)
+
+
+## Ground contact and height per clip, sampled at 13 frames (CPU skinning of LOD0):
+## lowest vertex y at the first frame, minimum over the clip, at the last frame, and the root
+## bone's y range. Then the jumps a clip switch makes without a cross-fade: the largest vertex
+## distance between idle's first frame and this clip's first frame (entering it from idle),
+## and between this clip's last frame and idle's first frame (settling back to idle).
+## Hover clips (lift) should start at idle's height; death should end lying on y = 0.
+func _ground(m: Node3D) -> String:
+	var sk: Skeleton3D = m.skeleton
+	var out := ["  ground per clip (lowest vertex y: first / min over clip / last frame; root y range; jump vs idle frame 0 entering / settling, m):"]
+	var idle0 := PackedVector3Array()
+	if "idle" in m.clips():
+		m.play("idle")
+		m.anim.seek(0.0, true)
+		idle0 = _skinned(m, m.lods[0], false)
+	var tol := 0.02 * maxf(float(m.info.get("scale_m", 1.0)), 1.0)
+	for c in m.clips():
+		var a: Animation = m.anim.get_animation(c)
+		m.play(c)
+		var n := 12
+		var lo_min := INF
+		var first := PackedVector3Array()
+		var last := PackedVector3Array()
+		var ry := Vector2(INF, -INF)
+		for i in n + 1:
+			m.anim.seek(a.length * i / n, true)
+			var pos := _skinned(m, m.lods[0], false)
+			lo_min = minf(lo_min, pos[_lowest(pos)].y)
+			var r := sk.get_bone_global_pose(0).origin.y
+			ry = Vector2(minf(ry.x, r), maxf(ry.y, r))
+			if i == 0:
+				first = pos
+			if i == n:
+				last = pos
+		var lo0 := first[_lowest(first)].y
+		var lo1 := last[_lowest(last)].y
+		var jin := _max_dist(idle0, first) if idle0.size() and c != "idle" else 0.0
+		var jout := _max_dist(last, idle0) if idle0.size() and c != "idle" and not c in m.HOLD_LAST else 0.0
+		var seam := _max_dist(first, last) if c in m.LOOPING else -1.0
+		out.append("    %s: %.3f / %.3f / %.3f; root y %.3f..%.3f; jump in %.3f out %.3f%s" % [c, lo0, lo_min, lo1, ry.x, ry.y, jin, jout,
+			"" if seam < 0 else "; loop seam %.4f" % seam])
+		if lo_min < -0.03:
+			_warn("%s/%s: geometry %.3f m below the floor" % [m.id, c, lo_min])
+		if c in m.HOLD_LAST and absf(lo1) > 0.05:
+			_warn("%s/%s: last frame's lowest point at y %.3f (not lying on the floor)" % [m.id, c, lo1])
+		if seam > 0.01:
+			_warn("%s/%s: loop seam %.3f m (first and last frame differ)" % [m.id, c, seam])
+		if c != "idle" and idle0.size() and absf(lo0 - idle0[_lowest(idle0)].y) > tol:
+			_warn("%s/%s: starts with its lowest point at y %.3f, idle at %.3f (height pop of %.2f m when switching)" % [m.id, c, lo0, idle0[_lowest(idle0)].y, absf(lo0 - idle0[_lowest(idle0)].y)])
+	m.play("rest")
+	return "\n".join(out)
+
+
+func _max_dist(a: PackedVector3Array, b: PackedVector3Array) -> float:
+	var w := 0.0
+	for i in mini(a.size(), b.size()):
+		w = maxf(w, a[i].distance_to(b[i]))
+	return w
+
+
+## Godot's glTF importer drops channels that never leave the rest pose. Read each clip GLB's
+## own channels and check that every channel which does leave the rest pose (any key off the
+## node's rest translation / rotation / scale) became a track of that type on that bone, and
+## that scale tracks really play: seek to the key furthest from 1 and compare the bone's
+## pose scale with the key.
+func _channels(m: Node3D) -> String:
+	var sk: Skeleton3D = m.skeleton
+	var out := []
+	for c in m.clips():
+		var path := "%s/%s/anims/%s.glb" % [Monster.ROOT, m.id, c]
+		var g := _glb(path)
+		if g.is_empty():
+			_check(false, "%s/%s: cannot read %s" % [m.id, c, path])
+			continue
+		var j: Dictionary = g["json"]
+		var bin: PackedByteArray = g["bin"]
+		var a: Animation = m.anim.get_animation(c)
+		var have := {}
+		for t in a.get_track_count():
+			have["%s|%d" % [String(a.track_get_path(t)).get_slice(":", 1), a.track_get_type(t)]] = t
+		var moving := {"translation": 0, "rotation": 0, "scale": 0}
+		var missing := []
+		for anim in j.get("animations", []):
+			for ch in anim["channels"]:
+				var tgt: Dictionary = ch["target"]
+				var node: Dictionary = j["nodes"][int(tgt["node"])]
+				var prop: String = tgt["path"]
+				if not moving.has(prop):
+					continue
+				var vals := _accessor(j, bin, int(anim["samplers"][int(ch["sampler"])]["output"]))
+				var rest: Array = node.get(prop, {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}[prop])
+				var off := false
+				for k in vals.size() / rest.size():
+					for e in rest.size():
+						if absf(vals[k * rest.size() + e] - float(rest[e])) > 1e-4:
+							off = true
+				if not off:
+					continue
+				moving[prop] += 1
+				var ty: int = {"translation": Animation.TYPE_POSITION_3D, "rotation": Animation.TYPE_ROTATION_3D, "scale": Animation.TYPE_SCALE_3D}[prop]
+				if not have.has("%s|%d" % [node.get("name", ""), ty]):
+					missing.append("%s.%s" % [node.get("name", ""), prop])
+		_check(missing.is_empty(), "%s/%s: GLB channels that leave the rest pose but have no Godot track: %s" % [m.id, c, missing])
+		var scl := 0
+		var scale_ok := ""
+		for key in have:
+			if not key.ends_with("|%d" % Animation.TYPE_SCALE_3D):
+				continue
+			scl += 1
+			var t: int = have[key]
+			var best := 0
+			for k in a.track_get_key_count(t):
+				if (a.track_get_key_value(t, k) - Vector3.ONE).length() > (a.track_get_key_value(t, best) - Vector3.ONE).length():
+					best = k
+			m.play(c)
+			m.anim.seek(a.track_get_key_time(t, best), true)
+			var b := sk.find_bone(key.get_slice("|", 0))
+			var want: Vector3 = a.track_get_key_value(t, best)
+			var got := sk.get_bone_pose_scale(b)
+			_check(got.is_equal_approx(want) or (got - want).length() < 1e-3, "%s/%s: scale track on %s keys %s, the bone plays %s" % [m.id, c, sk.get_bone_name(b), want, got])
+			scale_ok = " (scale plays: %s %s at %.2fs)" % [sk.get_bone_name(b), got, a.track_get_key_time(t, best)]
+		out.append("%s GLB moving T/R/S %d/%d/%d -> tracks %d (scale %d)%s" % [c, moving["translation"], moving["rotation"], moving["scale"], a.get_track_count(), scl, scale_ok])
+	m.play("rest")
+	return "  channels: " + "; ".join(out)
+
+
+## {json, bin} of a GLB, or {} on error.
+func _glb(path: String) -> Dictionary:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	if f.get_32() != 0x46546C67:
+		return {}
+	f.get_32()
+	f.get_32()
+	var jl := f.get_32()
+	f.get_32()
+	var j = JSON.parse_string(f.get_buffer(jl).get_string_from_utf8())
+	var bin := PackedByteArray()
+	if f.get_position() < f.get_length():
+		var bl := f.get_32()
+		f.get_32()
+		bin = f.get_buffer(bl)
+	return {"json": j, "bin": bin} if j is Dictionary else {}
+
+
+## Float accessor (VEC3 / VEC4 / SCALAR, tightly packed or strided) as a flat array.
+func _accessor(j: Dictionary, bin: PackedByteArray, idx: int) -> PackedFloat32Array:
+	var acc: Dictionary = j["accessors"][idx]
+	var bv: Dictionary = j["bufferViews"][int(acc["bufferView"])]
+	var comps: int = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[acc["type"]]
+	var stride: int = int(bv.get("byteStride", comps * 4))
+	var base: int = int(bv.get("byteOffset", 0)) + int(acc.get("byteOffset", 0))
+	var out := PackedFloat32Array()
+	if int(acc["componentType"]) != 5126:
+		return out
+	for i in int(acc["count"]):
+		for e in comps:
+			out.append(bin.decode_float(base + i * stride + e * 4))
+	return out
+
+
+## Switching idle -> move clip in real 30 fps frames: the largest distance any LOD0 vertex
+## moves in one frame, with an instant switch and with Monster.blend_time 0.25 s, against
+## the largest per-frame step inside the move clip itself (normal motion).
+func _transition(m: Node3D) -> String:
+	var mv: String = m.move_clip()
+	if mv == "" or not "idle" in m.clips():
+		return "  transition: no idle / move clip"
+	var out := []
+	var steady := 0.0
+	for bt in [0.0, 0.25]:
+		m.blend_time = bt
+		m.play("idle")
+		await _run(m, 0.5)
+		var prev := _skinned(m, m.lods[0], false)
+		m.play(mv)
+		var worst := 0.0
+		for i in 15:
+			m.anim.advance(1.0 / 30.0)
+			var pos := _skinned(m, m.lods[0], false)
+			var step := _max_dist(prev, pos)
+			if i >= 10 and bt == 0.0:
+				steady = maxf(steady, step)
+			elif i < 10:
+				worst = maxf(worst, step)
+			prev = pos
+		out.append("%s %.3f m" % ["instant" if bt == 0.0 else "cross-fade %.2fs" % bt, worst])
+	m.blend_time = 0.0
+	m.play("rest")
+	return "  transition idle -> %s, largest vertex step per 1/30 s frame: %s; inside %s %.3f m" % [mv, ", ".join(out), mv, steady]

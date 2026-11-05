@@ -24,6 +24,9 @@ const PROP_ROOT := "res://assets/props"
 const LOOPING := ["idle", "walk", "run", "move", "fly", "swim", "hover"]
 ## One-shots that never hand over to settle_clip: the pose holds.
 const HOLD_LAST := ["death"]
+## The clip that moves the monster, first match wins: legless and flying plans have no
+## walk (ghost and eagle fly, octopus, shark and merfolk swim). move_clip() picks it.
+const MOVE_CLIPS := ["walk", "run", "move", "swim", "fly", "hover"]
 ## Screen-coverage switch points (fraction of viewport height), same as monster-forge's viewer.
 const LOD_COVERAGE := [0.6, 0.3, 0.12]
 
@@ -46,6 +49,14 @@ var props: Dictionary = {}          ## socket -> BoneAttachment3D
 ## When a one-shot clip (hit, attack_*, breath) ends, play this one (e.g. "idle"); "" holds
 ## the last frame. Clips in HOLD_LAST (death) always hold.
 var settle_clip := ""
+## Cross-fade in seconds for play() and the settle hand-over. 0 (the default) switches on
+## the next frame. Clip switches otherwise jump: idle -> swim lifts the octopus 0.21 m and
+## the merfolk 0.65 m in one frame (their idle is on the ground, swim hovers), and every
+## move clip starts mid-stride. The lab uses 0.25.
+var blend_time := 0.0
+## The clip play() last started ("" after play("rest")). A one-shot that ended (death) is no
+## longer is_playing() but still holds this clip's last frame.
+var current_clip := ""
 
 
 static func list_ids() -> PackedStringArray:
@@ -132,7 +143,8 @@ func _setup(dir: String, fov_deg: float) -> bool:
 
 func _on_clip_finished(clip: StringName) -> void:
 	if settle_clip != "" and String(clip) not in HOLD_LAST and anim.has_animation(settle_clip):
-		anim.play(settle_clip)
+		current_clip = settle_clip
+		anim.play(settle_clip, blend_time)
 
 
 ## Every bone keyed at its rest pose. Godot drops glTF channels that never leave the rest
@@ -280,13 +292,24 @@ func clips() -> PackedStringArray:
 	return out
 
 
+## The locomotion clip: walk, else the first of MOVE_CLIPS this monster has ("" if none).
+func move_clip() -> String:
+	var have := clips()
+	for c in MOVE_CLIPS:
+		if c in have:
+			return c
+	return ""
+
+
 ## Plays a clip from the start; "" or "rest" stops and shows the bind pose.
 func play(clip: String) -> void:
 	if clip == "" or clip == "rest" or not anim.has_animation(clip):
 		anim.stop()
 		skeleton.reset_bone_poses()
+		current_clip = ""
 		return
-	anim.play(clip)
+	current_clip = clip
+	anim.play(clip, blend_time)
 
 
 ## -1: auto (GeometryInstance3D visibility ranges, by camera distance). k: pin LOD k.
