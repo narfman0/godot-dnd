@@ -143,14 +143,20 @@ func _row(m: Node3D, details: Array[String]) -> String:
 		var per_clip := []
 		for c in clips:
 			m.play(c)
-			m.anim.seek(m.anim.get_animation(c).length * 0.5, true)
+			# Mid-clip, else 30%: a loop whose layers are all sin(2 pi t) (the swarm's one
+			# bone, the snake's standing-wave idle since round 8) is exactly at rest at t = 0.5.
 			var mv := 0
-			if c in ["idle", "walk"] and sk.get_bone_count() == 1:
-				m.anim.seek(m.anim.get_animation(c).length * 0.3, true)   # one bone: mid-cycle can be rest
-			for b in sk.get_bone_count():
-				if _pose_dev(sk, b) > 0.1:
-					mv += 1
-			per_clip.append("%s %d bones" % [c, mv])
+			var at := 0.5
+			for f in [0.5, 0.3]:
+				m.anim.seek(m.anim.get_animation(c).length * f, true)
+				at = f
+				mv = 0
+				for b in sk.get_bone_count():
+					if _pose_dev(sk, b) > 0.1:
+						mv += 1
+				if mv > 0:
+					break
+			per_clip.append("%s %d bones%s" % [c, mv, "" if at == 0.5 else " (at 30%, rest mid-cycle)"])
 			_check(mv > 0, "%s/%s: no bone moved" % [m.id, c])
 		d.append("  played mid-clip: " + ", ".join(per_clip))
 		d.append(await _playback(m))

@@ -402,6 +402,105 @@ Screenshots (`lab_screenshot.gd`, Xvfb). Round 5 has no harpy fly or walk shots:
   strip from a hanging feather tip runs from the knee down to the floor and along it behind
   the front foot. This is the same tear as in fly (Blender: 5 walk edges).
 
+Round 8 (2026-11-05): re-sync after monster-forge 1def4a4..f8bb67e (eagle on the avian
+max-dimension scale, cobra strike, merfolk throw, harpy body seam, every legged idle starting
+on the rest pose with one-shots starting on the idle's first frame and walks at the cycle
+frame nearest it). Synced with `--ids` for 15 monsters (not `--all`: centaur-trooper and the
+GPU stream's monsters were left alone). Updated: giant-eagle (rig, LODs, 5 clips), harpy (rig,
+LODs, 5 clips; fly unchanged), constrictor-snake (5 clips), merfolk-skirmisher
+(attack_ranged), goblin, wolf, owlbear, spider, dragon (clips and LOD2-3), ghost (idle,
+attack, death). Octopus, pudding, fungus, shark and swarm were unchanged. `check_monsters.gd`
+on the 15: ALL PASS (32 props), every clip binds 100%. WARNs are the three fly/swim height
+changes (harpy fly, dragon fly, merfolk swim), as before.
+
+**Check change:** the snake's new idle is a standing wave (sin 2πt), so at 50% it is exactly
+the rest pose and the "every clip moves a bone" probe failed. The probe now tries 50%, then
+30% (which the one-bone swarm already needed), and says so in the output.
+
+Jumps, in metres. "Frame 0" is the check's `jump in` column: the largest LOD0 vertex distance
+between idle frame 0 and the clip's frame 0. "Probe" is `_transition`: idle is played 0.5 s,
+then the clip starts, and the largest per-frame step is reported, both instant and with a
+0.25 s cross-fade. Before = round 6 (harpy: round 7).
+
+| id | clips bound | frame 0: attack / hit / death (before) | frame 0: move clip (before) | probe instant / cross-fade (before) |
+|---|---|---|---|---|
+| goblin-warrior | 12/12, 15/15 ranged, 15, 14, 14, 9 | 0 / 0 / 0, ranged 0 (0.522 / 0.027 / 0.027, 0.027) | walk 0.072 (0.099, -27%) | 0.073 / 0.039 (0.116 / 0.033) |
+| wolf | 21, 23, 21, 22, 18 | 0 / 0 / 0 (0.067 / 0.074 / 0.074) | walk 0.197 (0.246, -20%) | 0.221 / 0.061 (0.223 / 0.061) |
+| owlbear | 20, 21, 20, 19, 18 | 0 / 0 / 0 (0.051 / 0.052 / 0.052) | walk 0.219 (0.267, -18%) | 0.221 / 0.067 (0.268 / 0.069) |
+| giant-spider | 32, 32, 32, 31, 31 | 0 / 0 / 0 (0.062 each) | walk 0.093 (0.414, -78%) | 0.096 / 0.100 (0.345 / 0.042) |
+| young-red-dragon | 32, breath 26, 26, fly 30, 34, 36, 26 | 0 / 0 / 0.042, breath 0 (0.775 / 0.764 / 0.764, 0.786) | walk 0.435 (0.423, +3%); fly 3.341 (same) | **1.506 / 0.269** (0.955 / 0.102) |
+| harpy | 14, 17, fly 16, 17, 17, 10 | 0 / 0 / 0 (0.167 / 0.060 / 0.060) | walk 0.122 (0.175, -30%); fly 1.274 (same) | 0.174 / 0.039 (0.206 / 0.043) |
+| giant-eagle (new rig, 56 bones) | 16, 16, fly 16, 15, 16 | 0.072 each (0.938) | fly 0.010 (0.616) | 1.121 / 0.192 (1.754 / 0.182) |
+| constrictor-snake | 12, 15, 15, 15, swim 15, 15 | 0 / 0 / 0 (0.270) | walk 0.379 (0.717), swim 0.320 (1.245) | 0.599 / 0.215 (0.439 / 0.168) |
+| merfolk-skirmisher | 16, ranged 16, 12, 19, 19, swim 16 | 0.059, ranged 0.059 (0.614) | swim 1.040 (same) | 1.030 / 0.139 (same) |
+| ghost | 12, 15, fly 10, 13, 14 | 0 / 0 / 0 (0.044 / 0.104 / 0.104) | fly 0.801 (0.702) | 0.841 / 0.117 (0.742 / 0.111) |
+| octopus, shark, pudding, fungus, swarm | unchanged | 0.225, 0.140, 0.041, 0.051, 0 | swim 0.384, swim 0.210, walk 0.203, walk 0.090, walk 0 | unchanged |
+
+- **Godot agrees with Blender.** Every frame-0 number above equals the clip's `from_idle_m`
+  in monster-forge `anims/clips.json` to the millimetre (for example dragon death 0.042, walk
+  0.435, fly 3.341; spider walk 0.093; octopus 0.2248). The eagle's `clips.json` (22:03) is
+  older than `from_idle_m` and has none. Godot measures it at 0.072 for the one-shots and
+  0.010 for fly, which are the values monster-forge's docs give from a scratch run.
+- **Frame 0 is now matched, but the game does not switch on frame 0.** A one-shot fired
+  mid-idle starts from wherever the idle is. A scratch scan (idle sampled at 16 points of
+  its cycle, against each clip's frame 0) gives the largest jump over the cycle, the jump
+  at idle 0.5 s, and how far the idle wanders from its own first frame:
+  - Goblin, wolf, owlbear, spider, harpy, swarm: one-shots 0.02-0.10 m at worst, which is the idle's own sway.
+  - Dragon: 1.66 m. The idle swings the tail tip (`bone_66`, lying on the floor at the left
+    side) 1.66 m sideways at 0.62 s and 1.34 m the other way at 1.88 s. The in-phase
+    5-degree sway adds up along the 9-bone curled tail. This is why the probe got worse:
+    idle -> walk 0.955 -> 1.506 m instant, 0.102 -> 0.269 m with the cross-fade.
+  - Eagle: 1.69 m. The idle beats its wings (bone_36 wing tip), so mid-idle it is far from
+    both its own frame 0 and fly's. This is by design, the same as a fly-to-fly switch.
+  - Snake: 0.28 m (its standing wave).
+  - Ghost: 0.23 m.
+  - Octopus and shark: 0.36 / 0.28 m.
+
+  The 0.25 s cross-fade stays the game's tool for mid-idle switches. Only the dragon's tail
+  needs a change upstream.
+- The probe's spider number has the cross-fade (0.100) larger than the instant switch
+  (0.096). The walk starts 0.09 m from the idle, so the blend adds no smoothing. It is not
+  a pop.
+- Harpy walk's lowest point is -0.010 (round 7 -0.023). The idle, attack and hit stay at
+  -0.008: these are the two hip-feather ground contacts.
+
+Screenshots (`lab_screenshot.gd`, Xvfb, plus the eagle-and-goblin scratch scene from round 6):
+- **giant-eagle rest / idle / fly:** stands on its talons with the wings raised and spread,
+  3.0 m wingspan, about as tall as the 1.8 m capsule at the head. Idle 0% and fly 0% are the
+  same picture. Idle 25% looks like fly 25%. At 50% the idle's wings are lower and the fly's
+  are swept forward and down. The talons are about 0.35 m off the floor in idle and fly.
+  **Next to the goblin**, the goblin reaches the eagle's belly. Round 6's eagle was 5.3 m to
+  the wing tips, with legs alone as tall as the goblin. This scale reads right.
+- **Eagle lunge (side, three-quarter, 0/25/50/75%):** small. At 25% the head draws back a
+  little, at 50% the body pitches and the beak goes forward and down, and at 75% it comes
+  back. No neck gap at 25% (round 6 had a dark gap). The raised wings hold their pose all
+  through. It reads as a peck rather than a lunge (head travel 0.26 x body length,
+  monster-forge).
+- **constrictor-snake strike, 25/50/75%:** at 25% the front third rears into a cobra S, with
+  the head about 0.6 m up and looking ahead. At 50% it has struck forward and down, the head
+  near the floor and the body slid forward. 75% is still in the hold. The rear of the body
+  stays on the floor throughout, and the top view shows a slight sideways coil at 25%. This
+  is a real strike now (round 6: head up 0.3-0.5 m).
+- **merfolk attack_ranged with the spear, 25/50/75%:** at 25% the spear is cocked above and
+  behind the head, tip forward-up and the shaft trailing back. At 50% it is level at head
+  height, tip forward, at release. At 75% the arm is forward and the spear level at chest
+  height. It still starts from the relaxed arm, so there is no raised-arm pop. The spear is
+  not thrown, of course: the game would detach it at release.
+- **harpy fly, front, 0/25/50%:** the 0% blades are gone. The hip feathers hang beside the
+  thighs, and the only long tips are the wings' own. At 25% a thin wing-tip feather hangs to
+  knee height on one side, with no strip to the floor. 50% is clean.
+- **harpy cut with a longsword, three-quarter, 25/50%:** at 25% the blade is level above the
+  head and at 50% raised diagonally. No grey sheet under the raised right armpit at either
+  frame (round 7 had one at both).
+- **harpy walk, side, 0/50%:** a short stride; the near foot is forward at 0% and the far foot
+  at 50%. The near wing's feathers hang in front of the legs to the floor with tapered tips,
+  and no torn strip. The feet are partly hidden behind that wing, so the stride ends are
+  hard to read from the side.
+- **goblin idle / attack_melee / attack_ranged / hit / death at 0%, side and front:**
+  pixel-identical (no pixel differs by more than 30 of 255 below the HUD).
+- **young-red-dragon idle 0/25/50% (three-quarter, top):** at 0% the curled tail lies in its
+  rest curve. At 25% the whole curl has swung sideways (above).
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -598,6 +697,12 @@ distances.
   (stretched sideways at 0%, a strip to the floor at 25-50%) and in walk. Its sword cut now
   raises the arm above the head and pulls a flat sheet off the right armpit (25-50%). The
   idle -> attack_melee frame-0 jump is 0.167 m (round 5 0.014). Walk dips to -0.023 m.
+  Round 8 re-checked: the fly blades, the armpit sheet and the walk strip are gone, the
+  frame-0 jumps are 0, and walk's lowest point is -0.010 m.
+- Round 8, reported upstream: the dragon's new in-phase idle tail sway moves the curled
+  tail tip 1.66 m within the idle, so a mid-idle switch to walk pops 1.5 m (0.27 m
+  cross-faded; round 6 0.96 / 0.10). The eagle's lunge is a small peck. Round 6's eagle
+  (neck gap, 1.75 m idle -> fly pop, 5.3 m size) and the merfolk throw are fixed.
 - LOD files name their material `Material_0.001` rather than LOD0's `Material_0`
   (`docs/lods.md` says same name). Harmless here, because the material is overridden.
 - Round 4 (body-plan pilots), reported upstream in monster-forge `docs/TODO.md` E. Round 5
