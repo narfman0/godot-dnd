@@ -1,7 +1,7 @@
 ## Screenshots of the monster lab, one PNG per monster, clip, time and view. Needs a display;
 ## headless servers: xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan ...
 ##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|move|all|idle,hit]
-##         [ts=0.5|0.3,0.5,0.7] [views=three,front,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
+##         [ts=0.5|0.3,0.5,0.7] [views=three,front,back,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
 ##         [gripoffset=0] [tag=_suffix] [prop_r=longsword] [prop_l=longbow|none] [bowstring=0] [swarm=12|1]
 ## swarm=<n>: units drawn for a swarm made as one unit (monster.json swarm_unit, default the
 ## lab's 12; 1 = the single unit).
@@ -9,7 +9,8 @@
 ## that hand empty), like the monster-forge viewer's ?prop_r=&prop_l=. bowstring=0 hides bow
 ## strings (Monster.set_bowstrings_visible).
 ## clips=move is the monster's locomotion clip: walk, else swim / fly (Monster.move_clip).
-## Views: three (3/4 front), front (camera on -Z looking +Z), side (camera on +X), top,
+## Views: three (3/4 front), front (camera on -Z looking +Z), back (camera on +Z: hanging
+## tails), side (camera on +X), top,
 ## hand_*/grip_* (close-up on that socket with skeleton and socket axes; skipped when the
 ## rig lacks it), lods (LOD0..3 at the same frame). The clip is paused at each t (fraction
 ## of its length), so every view of one t shows the same pose.
@@ -79,6 +80,8 @@ func _view(lab: Node3D, m: Node3D, view: String, stem: String, skel: bool) -> vo
 	match view:
 		"front":
 			lab.cam_yaw = 0.0
+		"back":
+			lab.cam_yaw = PI
 		"side":
 			lab.cam_yaw = PI / 2
 		"top":

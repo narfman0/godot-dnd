@@ -10,9 +10,9 @@ python3 -I tools/sync_monsters.py --all                 # monsters + props; or -
 godot res://scenes/monster_lab.tscn                     # look at them
 godot --headless -s res://tools/check_monsters.gd       # import test, prints ALL PASS
 xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan \
-    -s res://tools/lab_screenshot.gd -- /tmp/shots clips=all ts=0.5 views=three,grip_r,lods
+    -s res://tools/lab_screenshot.gd -- ~/shots clips=all ts=0.5 views=three,grip_r,lods
 # any loadout (like the forge viewer's ?prop_r=&prop_l=), bow strings off:
-#   ... -- /tmp/shots ids=harpy clips=attack_melee prop_r=longsword prop_l=none bowstring=0
+#   ... -- ~/shots ids=harpy clips=attack_melee prop_r=longsword prop_l=none bowstring=0
 ```
 
 `assets/monsters/` and `assets/props/` are git-ignored (generated art: ~15 MB per monster,
@@ -571,6 +571,80 @@ The idle wanders 0.307 m from its first frame (1.66 in round 8). The probe (idle
 walk) is 0.578 m instant and 0.084 m with the 0.25 s cross-fade (round 8 1.506 / 0.269, round
 6 0.955 / 0.102): the cross-faded switch is now smoother than round 6's.
 
+Round 10 (2026-11-05): wolf and centaur-trooper only, after monster-forge 882a7bd and 5600f3e.
+Both are re-rigged with a 6-bone tail chain that the rig stage inserts from the mesh
+(`tail_00..05`; wolf on `bone_17`, centaur on `bone_15`), and the clips drive *hanging* tails:
+a pendulum sway in idle and walk, a lift about the tail's own plane in attack and hit, and in
+death the tail rolls with the body. Synced with `--ids wolf centaur-trooper` from the manifests
+of 02:43:32 (wolf) and 02:44:42 (centaur); each updated 10 files (rig, 3 LODs, 5 clips,
+monster.json), and the props were unchanged. The owlbear was not synced: its tail rig was still
+being reworked upstream. `check_monsters.gd` on the two, and on all 16 synced monsters except
+the owlbear, gives ALL PASS (32 props). Every clip binds 100%. WARNs: the same three fly/swim
+height changes, plus four new ones on the centaur (idle, walk, attack_melee, hit at -0.0301 m,
+0.1 mm past the check's -0.03 limit: the tail end, see below).
+
+| | wolf | centaur-trooper |
+|---|---|---|
+| bones | 34 (28 + `tail_00..05`) | 44 (with `tail_00..05`) |
+| tracks bound (attack, death, hit, idle, walk) | 27, 24, 27, 28, 24 (round 8: 21, 23, 21, 22, 18) | 22, 19, 25, 27, 23 (round 6: 21, 19, 19, 21, 17) |
+| lowest y per clip, min over the clip | attack -0.002, death -0.009, hit -0.001, idle -0.001, walk -0.001 | attack / hit / idle / walk -0.030 (`tail_05`; hit -0.032 at 4% sampled finer), death -0.009 (`bone_20`) |
+| death last frame | lying, top 0.572 m, ends at 0.000 | lying, top 1.579 m, ends at 0.000 |
+| frame 0 vs idle frame 0: attack / hit / death | 0 / 0 / 0 (round 8 the same) | 0 / 0 / **0.119** (`tail_05`) |
+| frame 0: walk | 0.197 (round 8 0.197) | 0.185 (Blender round 7: 0.239) |
+| probe idle 0.5 s -> walk: instant / 0.25 s cross-fade / inside walk | 0.221 / 0.061 / 0.055 (round 8 0.221 / 0.061) | 0.316 / 0.059 / 0.035 |
+| idle-cycle scan: idle wander; worst one-shot; walk | 0.091; 0.091; 0.198 (round 8: about 0.09) | 0.156; attack and hit 0.156, death 0.260; walk 0.265 |
+| `tail_05` travel: idle / walk / attack / hit | sideways 0.075 / 0.189 m; attack 0.11 m up and back, hit 0.12 m back | sideways 0.12 / 0.44 m (back 0.17 / 0.32); attack 0.22 m back, hit 0.41 m back |
+| tail vertices at the end of death | y 0.18-0.43 m (body top 0.57) | y 0.87-1.47 m (body top 1.58) |
+
+Every frame-0 number equals `from_idle_m` in `anims/clips.json`, and every idle-cycle maximum
+equals `from_idle_max_m` (centaur 0.1558 / 0.2611 / 0.2663).
+
+- **Centaur death starts 0.119 m off the idle.** The vertex is the tail end. At idle frame 0
+  the floor lift has already turned the tail (`tail_05` at z 1.00 and y 0.22, against
+  z 0.90 and y 0.25 at rest), while death's first frame has the tail at rest. In round 7 every
+  legged one-shot started at 0 except the dragon's death (0.042). The wolf's idle does not lift
+  at frame 0, so its death starts at 0.
+- **Centaur tail end below the floor:** -0.030 m in idle, walk, attack and hit, from the first
+  frame on. Upstream this is by design (`DIP_MAX`): the lower tail is fused to the left hind
+  leg, and lifting it clear tears the sheet. The check's limit is -0.03, so it warns.
+- **Tails in death stay level.** The roll turns a hanging tail with the body, so in the last
+  frame it sticks out sideways at the rump's height, like the stiff legs. The centaur's tail
+  is 0.87 m above the floor at its lowest point. It does not drape onto the floor.
+- **Grip (centaur):** `grip_r` is 0.131 m from `hand_r`. Nearest skin is 4.5 cm at idle
+  (8 vertices within 5 cm) and 4.3 cm in walk. In the thrust at 25/50/75% it is
+  2.5/8.1/8.9 cm. `hand_r` is 1.2 cm from the skin in walk. The thrust at 50% is unchanged
+  from round 6: grip at (-0.20, 1.65, -1.36), tip (-0.18, 0.24, -0.95). The pike is 3.5 m
+  (scale 1.000, `rider_height_m`).
+
+`lab_screenshot.gd` has a new `back` view (camera on +Z), because a hanging tail is hidden
+under the rump in the top view and behind the legs in the front view.
+
+Screenshots (`lab_screenshot.gd`, Xvfb):
+- **wolf idle 0/25/50/75%, back:** the bushy tail hangs from the rump to the hocks. At 25%
+  its end swings a few cm to one side and at 75% to the other (0.075 m). Side and top views
+  at 0 and 50% look the same, because the top view cannot see the hanging tail.
+- **wolf walk 0/25/50/75%, side, top and back:** a clean four-legged stride. From the side,
+  the tail hangs behind the haunches the whole time and never follows a leg. From the back
+  it swings like a pendulum, centred at 0 and 50% and to one side at 25 and 75%. At 25% its
+  end is squared off. **At 75% a dark patch shows at the tail end beside the hind hock**
+  (back view): a fold or back face where the swung tail meets the leg. It is not a
+  stretched edge, and Blender counts 0 of those in walk.
+- **wolf death, end, side and three-quarter:** the wolf lies on its side and the tail lies
+  along with the body. No tear.
+- **centaur walk 0/25/50/75%, side, three-quarter and back:** **the tail no longer kicks.**
+  The long tail sheet hangs from the rump to the floor behind the hind legs in all four
+  frames. From the back it swings side to side (to the outside at 0-25%, inward at 50%,
+  straight at 75%), over the hind leg it is fused to. In round 6 it swept under the belly
+  at 0% and kicked forward like a hoof at 50%. At 25% the near hind leg steps back into
+  the sheet's front edge. The pike moves with the walk's right-arm swing: its head drops to
+  near the floor ahead at 25% and rises above head height at 75% (three-quarter).
+- **centaur death, end, side, three-quarter and back:** the centaur lies on its side. The
+  tail sheet sticks out level beside the rump, parallel to the legs, rather than lying on the
+  floor (see above).
+- **centaur attack_melee 50% with the pike (side and three-quarter):** a thrust forward and
+  up, at 3.5 m. The tail hangs behind. The dark spike fan from the reference's stick is still
+  in front of the chest at the grip.
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -800,8 +874,15 @@ distances.
 - Round 6, reported upstream: the centaur's tail has no bones and swings with the near hind
   leg; the reference's arrow-shaft stick shreds in the thrust; there is no left arm, and its
   two-handed pike gets the upright-body prop scale (1.333, 4.7 m long); death dips to
-  -0.033 m. The eagle's idle -> fly instant switch is the largest pop of all (1.75 m), and
+  -0.033 m. Round 10: the tail has its own chain (`tail_00..05`) and hangs and
+  swings behind the hind legs in the walk. It does not kick. The pike is 3.5 m since round
+  9. The stick fan and the 8-9 cm grip in the thrust remain. The eagle's idle -> fly instant switch is the largest pop of all (1.75 m), and
   its attack wind-up shows a gap at the neck. The merfolk's attack_ranged still starts from
   the raised rest arm (0.61 m jump).
+- Round 10, reported upstream: the centaur's death starts 0.119 m off the idle (the idle's
+  tail lift against the death's tail at rest). Its tail end sits at -0.030 m in idle, walk,
+  attack and hit, which trips the check's -0.03 WARN by 0.1 mm. In death, both tails stay
+  level with the rolled body instead of lying on the floor (the centaur's is 0.87 m up). The
+  wolf's walk at 75% shows a dark fold at the tail end beside the hind hock (back view).
 - With `--verbose`, Godot warns "Buffer view byte stride should be declared for vertex
   attributes". There are no warnings without `--verbose`.
