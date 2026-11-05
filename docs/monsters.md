@@ -98,7 +98,7 @@ again on the nine body-plan pilots in round 4 (below).
 | LOD material | the LOD files have a material (`Material_0.001`, not LOD0's name) without textures. The loader applies LOD0's material as a surface override. |
 | Clips | one armature-only GLB per clip, listed in `manifest.anim.clips`. All tracks are `Armature/Skeleton3D:<bone>` and bind 100% by bone name, for every clip of every pilot (36 clips; table below) |
 | Root motion | none: the clips are in place, and the root bone ends where it starts |
-| Grip sockets | `grip_r` / `grip_l`: non-deforming children of `hand_r` / `hand_l`, at the centre of the fist (goblin: 2 cm from the hand bone, 53-66 vertices within 5 cm), in prop space. At rest +Y points forward (-Z) and +Z points up (+Y), so a sword points forward with its -Z edge down. Goblin, harpy, ghost and (since round 5) merfolk-skirmisher have them. |
+| Grip sockets | `grip_r` / `grip_l`: non-deforming children of `hand_r` / `hand_l`, at the centre of the fist (goblin: 2 cm from the hand bone, 53-66 vertices within 5 cm), in prop space. At rest +Y points forward (-Z) and +Z points up (+Y), so a sword points forward with its -Z edge down. Goblin, harpy, ghost, merfolk-skirmisher (since round 5) and centaur-trooper (round 6, `grip_r` only) have them. |
 
 Round 3 run (2026-11-04, after `sync_monsters.py --all`), tracks bound / total per clip:
 
@@ -272,6 +272,70 @@ props. Clips and tracks of the monsters that changed (every clip binds 100%):
   (would have fallen back to the CSG placeholder). It now takes the stave plus an optional
   `string` node (above).
 
+Round 6 (2026-11-04): re-sync after monster-forge ede55a9, 71dd174 and 1def4a4 (new
+stretched snake, a real centaur, re-rolled eagle, merfolk thrust and arm relax, lifted
+one-shots). Synced with `--ids constrictor-snake centaur-trooper giant-eagle
+merfolk-skirmisher giant-octopus swarm-of-rats ghost`; swarm-of-rats had no change (its
+scatter death came in round 5). `--all` would also have updated the harpy (its rig is being
+rewritten upstream; not synced or tested this round). `check_monsters.gd` ALL PASS on 16
+monsters and 32 props; every clip binds 100%.
+
+| id | clips (bound/total) | rest bbox x,y,z m | lowest y idle / move, first frame (min) | idle -> move per frame: instant / 0.25 s cross-fade | idle -> one-shots, largest vertex jump at frame 0 |
+|---|---|---|---|---|---|
+| centaur-trooper (new) | attack_melee 21/21, death 19/19, hit 19/19, idle 21/21, walk 17/17 | 1.59 x 2.40 x 2.10 | -0.004 / walk -0.003 (-0.006) | 0.379 / 0.082 m | 0.168 m (one-shots start on the floor, like idle) |
+| constrictor-snake | attack_melee 6/6, death 15/15, hit 15/15, idle 15/15, swim 15/15, walk 15/15 | 0.40 x 0.56 x 4.00 | 0.000 / walk 0.000 (0.000) | 0.439 / 0.168 m; idle -> swim frame 0 jump 1.245 | 0.270 m |
+| giant-eagle | attack_melee 9/9, death 8/8, fly 17/17, hit 10/10, idle 17/17 | 5.84 x 5.29 x 3.83 (round 5: 3.97 x 3.81 x 3.40) | 0.352 / fly 0.368 (0.320) | 1.754 / 0.182 m (round 5: 1.070 / 0.154) | 0.938 m: pose only, attack / hit / death now start at 0.348 (round 5: 0.000) |
+| giant-octopus | attack_melee 14/14, death 43/43, hit 43/43, idle 43/43, swim 42/42 | unchanged | 0.212 / swim 0.215 (round 5: 0.348 / 0.215) | 0.275 / 0.124 m (0.339 / 0.119) | 0.225 m (round 5: 0.55): one-shots start at 0.205 |
+| merfolk-skirmisher | attack_melee 16/16, attack_ranged 15/15, death 12/12, hit 19/19, idle 19/19, swim 16/16 | unchanged | 0.180 / swim 0.659 (0.431) | 1.030 / 0.139 m | 0.059 m attack_melee, hit, death (round 5: 0.19); attack_ranged 0.614 (starts from the raised rest arm) |
+| ghost | death 15/15 | unchanged | | | death now starts at 0.180 (idle 0.254), jump 0.104 m, the same as hit |
+
+Ground: no clip below -0.01 m except the centaur's death (min -0.033 m mid-fall, WARN);
+every death ends at 0.000. Screenshots (`lab_screenshot.gd`, plus a scratch script that
+stands the goblin next to the eagle):
+- **constrictor-snake:** the 4 m mesh lies stretched along the floor (renders with its
+  texture-stage colours, a python pattern). Walk: an S-wave travels along the body in the top
+  view, and the whole length stays on the floor in the side view, the head end a little
+  raised. attack_melee keys the front five bones only: the head rears about 0.3-0.5 m at 25%,
+  drops forward and down at 50-75% and lifts a little at the end. A small strike for a 4 m
+  snake.
+- **centaur-trooper:** faces -Z, four legs on the floor; renders textured (palomino horse,
+  bearded rider with a green hood). Walk: the four hooves cycle in diagonal pairs, and the
+  hind hooves drag almost flat at the back of the stride. **The tail swings like a hind
+  leg**: the manifest has no tail bones (`parts.tail` is empty), and the long tail sheet
+  follows the near hind leg. At 0% it is swept forward under the belly with that leg, and
+  at 50% its tip kicks forward like a hoof. attack_melee is a **thrust**, not a sword cut
+  (the registry `pike` is a polearm; manifest `style: thrust`): the right forearm drives
+  forward, the grip moves from z -0.69 to -1.36 m and up 0.22 m, and the prop axis stays
+  forward ((-0.18, 0.24, -0.95) at 50%). The stick the reference drew (an arrow shaft out of
+  the left side) shreds into a fan of dark spikes in front of the chest at 25-75%. With
+  `prop_r=longsword prop_l=longbow` the lab warns "centaur-trooper: no grip_l / hand_l bone,
+  longbow not shown", attaches nothing on the left and keeps the sword (no crash). Death
+  lies on its side, head on the floor.
+- **centaur pike: wrong scale and one-handed.** `attach_prop` scales by `scale_m / 1.8` =
+  1.333 (scale_m 2.4 is the whole centaur), so the 3.5 m pike becomes 4.7 m and very thick,
+  while the rider's arm is human-sized. It is a two-hander (`grip: 2`) on a one-armed rig,
+  and its butt runs back along the horse's flank. `grip_r` is 13 cm from `hand_r` and 5.4 cm
+  from the nearest skin at idle (0 vertices within 5 cm; goblin 2 cm), 8-9 cm in the thrust.
+- **giant-eagle:** stands on its talons at rest, wings raised and symmetric in the front
+  view, painted as a bald eagle. Idle and fly look the same at 25% and 75%: upright, wings
+  up, one leg forward, talons ~0.35 m above the floor (small beat). attack_melee: at 25% the
+  head is drawn back behind the near wing with a dark gap at the neck; at 50% the body
+  pitches forward and the beak leads, forward and down; at 75% it comes back. Death lies on
+  its breast, wings spread, tail fan standing up. **Scale:** 5.84 m wingspan, 5.29 m to the
+  raised wing tips, the head at about 3.5 m. Next to the 1.0 m goblin, the eagle's legs alone
+  are the goblin's height. A 20 ft wingspan is right for a Large giant eagle; the height
+  comes from the raised wings.
+- **merfolk-skirmisher:** idle holds the spear upright at the right side, the shaft from
+  the tail up past the head, tip up (0.07, 0.95, -0.31), grip at y 1.52 m (round 5: level
+  above the head). attack_melee is a thrust: at 25% it is drawn back with the shaft across
+  the face, at 50% the arm is straight forward with the tip forward (-0.18, 0.23, -0.95), and
+  at 75% it is still forward and a little up. The spear prop shows no clear blade: the
+  forward end is a wooden section with lugs and a short dark tip.
+- **giant-octopus:** idle, attack_melee and hit at frame 0 sit at the same height from the
+  side: no pop. attack_melee at 50% rises and reaches with the front tentacles.
+- **swarm-of-rats:** death unchanged since round 5: a wide pile of flattened rats.
+- **ghost:** death lies flat as in round 5 (last frame 1.50 x 0.78 x 2.23 m).
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -326,7 +390,7 @@ because runtime meshes have no generated LODs.
 ### Sockets and props
 
 **Where props go.** Held props go on `grip_socket("r")` / `grip_socket("l")`: `grip_r` /
-`grip_l` when the rig has them (goblin, harpy, ghost, merfolk), else `hand_r` / `hand_l`.
+`grip_l` when the rig has them (goblin, harpy, ghost, merfolk, centaur right only), else `hand_r` / `hand_l`.
 `attach_prop(prop, socket)` adds a `BoneAttachment3D` (`bone_name = socket`) under the
 skeleton, parents the prop to it, and scales it by `scale_m / 1.8`. This scaling is meant
 for upright bodies; the loader does not check the body plan, since only handed bodies get
@@ -479,6 +543,13 @@ distances.
   attack, hit and death clips start on the floor (0.19-1.03 m jump on every settle to idle);
   the harpy's left `grip_l` is 11 cm off the skin; the merfolk's spear attack is a sword
   cut; the bow string passes through the goblin's forearm in attack_ranged; the whip is a
-  rigid mesh.
+  rigid mesh. Round 6 re-checked them: the eagle, octopus and merfolk one-shots now start at
+  the idle height, and the merfolk thrusts with the spear held upright at idle.
+- Round 6, reported upstream: the centaur's tail has no bones and swings with the near hind
+  leg; the reference's arrow-shaft stick shreds in the thrust; there is no left arm, and its
+  two-handed pike gets the upright-body prop scale (1.333, 4.7 m long); death dips to
+  -0.033 m. The eagle's idle -> fly instant switch is the largest pop of all (1.75 m), and
+  its attack wind-up shows a gap at the neck. The merfolk's attack_ranged still starts from
+  the raised rest arm (0.61 m jump).
 - With `--verbose`, Godot warns "Buffer view byte stride should be declared for vertex
   attributes". There are no warnings without `--verbose`.
