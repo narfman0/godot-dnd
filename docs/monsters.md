@@ -336,6 +336,72 @@ stands the goblin next to the eagle):
 - **swarm-of-rats:** death unchanged since round 5: a wide pile of flattened rats.
 - **ghost:** death lies flat as in round 5 (last frame 1.50 x 0.78 x 2.23 m).
 
+Round 7 (2026-11-04): the harpy only, after monster-forge 9213dc2 and 1638b68. Its rig is now
+the SkinTokens roll_1 with wing chains the rig stage inserts from the mesh (`wing_r_00..03`,
+`wing_l_00..03`, both on `bone_3`), plus a seam-aware arm-wing weight blend. The hand-built
+rig and its re-weights are gone. `sync_monsters.py --ids harpy` updated 11 files: the 4 LOD
+GLBs, 6 clips and `monster.json`. `check_monsters.gd harpy` gives ALL PASS (with the 32 props)
+and one WARN: fly starts 0.36 m above idle, which round 5 also had (0.35).
+
+| | round 7 | round 5 |
+|---|---|---|
+| bones | 32: `bone_0`..`bone_21` (some), `hand_*`/`grip_*`, `wing_l_00..03`, `wing_r_00..03` | 38 |
+| clips (bound/total) | attack_melee 14/14, death 17/17, fly 16/16, hit 17/17, idle 17/17, walk 10/10 | 15/15, 17/17, 16/16, 18/18, 18/18, 10/10 |
+| LODs | LOD0-3 on one `Skeleton3D` with LOD0's skin, 32 binds each, all 8 `wing_*` bound; LOD1-3 follow the skeleton (p95 0.002 / 0.006 / 0.008 m) | same |
+| wing tracks | fly keys all 8 `wing_*`; idle and hit key `wing_l_00`, `wing_r_00`; attack_melee, walk and death key `wing_r_00` | (no `wing_*`) |
+| nearest skin at walk 0.55 s: `hand_r` / `hand_l` / `grip_r` / `grip_l` | 3.1 / 2.2 / 2.2 / 1.8 cm (12 / 14 / 6 / 16 vertices within 5 cm) | 1.9 / 8.2 / 2.9 / 11.2 cm (17 / 0 / 14 / 0) |
+| `grip_r` in attack_melee 25 / 50 / 75% | 2.2 / 2.2 / 1.8 cm; grip at y 1.73 / 1.62 / 0.83 m | 0.9 / 2.0 / 2.4 cm; y 1.27 / 1.18 / 0.77 |
+| grip from its hand bone | `grip_r` 0.108 m, `grip_l` 0.105 m | 0.034 m |
+| lowest y idle / walk (min over the clip) | -0.008 / -0.023 | -0.002 / -0.008 |
+| idle -> walk per frame: instant / 0.25 s cross-fade / inside walk | 0.206 / 0.043 / 0.054 m | 0.139 / 0.044 / 0.035 m |
+| idle frame 0 -> attack_melee / hit / walk / fly frame 0 | 0.167 / 0.060 / 0.175 / 1.274 m | 0.014 / 0.025 / 0.113 / 1.378 m |
+| death last frame | lying, top 0.876 m, `bone_0` turned 90 deg, ends at 0.000 | top 0.907 m |
+
+Longsword through `loadout_override`: at idle on `grip_r` the tip points forward (0, 0.15,
+-0.99) with the edge down. At attack_melee 50% the tip is (-0.57, 0.82, -0.02).
+
+Bone trace of fly (a scratch script that seeks the clip and reads the global bone poses):
+`hand_r` stays at x 0.48 and `hand_l` at x -0.37 in all four samples. The hands move only with
+the body's bob (y 1.16-1.26 m). Meanwhile `wing_r_03` swings from (1.11, 1.49) at 0% through
+(0.86, 1.24) and (0.36, 1.05) to (0.75, 1.07) at 75%. In attack_melee, `hand_r` rises to
+y 1.63 m at 25% while `wing_r_01` stays at y 1.18-1.30 m.
+
+Screenshots (`lab_screenshot.gd`, Xvfb). Round 5 has no harpy fly or walk shots:
+- **fly, front, 0/25/50/75%:** the wings beat and the arms do not follow. Both hands hang
+  at the hips in every frame, and the arm is no longer pulled into the wing. The wings are
+  raised and spread at 0%, hang beside the legs at 25%, are folded down behind the hips at
+  50% and spread again at 75%.
+- **fly tears are at the hanging wing tips, next to the legs.** At 0% (wings spread, the top
+  of the upstroke), the long lower feathers stretch sideways from the hips into flat blades
+  out past the wing span, longer on the right. At 25% a thin strip runs from the hip down to
+  the floor below the feet (side view). At 50% a thin dark sliver crosses in front of the
+  shins at ankle height (front view). This matches the Blender count: 96 stretched edges,
+  mostly feather tips skinned to the thighs and hips beside `wing_*_03`.
+- **fly, side:** the wings stay behind the back. The beat is mostly sideways, so the side
+  view changes little, apart from the strip at 25%.
+- **attack_melee with a longsword, three-quarter, 25/50/75%:** the sword arm lifts clean of
+  the wing. At 25% the right arm is straight up above the head with the blade level across
+  the top. At 50% the fist is above and in front of the face and the blade is raised
+  diagonally. At 75% the cut has come down across the body to the left, with the blade
+  level at the belt. In all three the right wing stays where it was.
+  - **Change from round 5:** the cut is now raised much higher. In round 5 the blade was
+    upright in front of the right shoulder at 50%, and 25% held it low.
+  - **New tear:** a flat grey sheet comes off the raised right armpit. At 25% it hangs
+    down the side of the torso, and at 50% it spans across the chest under the arm. This
+    is the right-side part of Blender's 48 sword-cut edges. Round 5's lower cut showed no
+    such sheet.
+- **attack_melee, `grip_r` close-ups:** the hilt passes through the fist at 25, 50 and 75%,
+  with the guard just outside it. At 75% the forearm reads as a flat dark plate above the
+  fist.
+- **idle with a longsword on `grip_r`** (close-up and three-quarter): the hilt is under the
+  gauntlet's fingers, the blade forward and the edge down. This is the same as round 5.
+- **idle with a longsword on `grip_l`** (close-up and three-quarter): the left fingers close
+  over the hilt and the blade points forward. In round 5 `grip_l` was 11 cm off the skin
+  and a left-hand prop floated beside the hand.
+- **walk 50%:** a normal stride with both wings hanging behind. In the side view, a thin
+  strip from a hanging feather tip runs from the knee down to the floor and along it behind
+  the front foot. This is the same tear as in fly (Blender: 5 walk edges).
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -521,12 +587,17 @@ distances.
   matte. The metallic texture's blue channel is 255 throughout, but the factor zeroes it.
   In round 2 the goblin and harpy were effectively full metal and read almost black
   without an environment.
-- Harpy: the skeleton is off-centre (root at x +0.068, shoulders at +0.26 / -0.125). The
-  right forearm and hand bones (bone_18, bone_19) carry no vertex with weight > 0.5. The
-  right arm is skinned to the wing chain (bone_11, bone_12), so `hand_r` does not follow
-  the visible right hand. The harpy's `hand_*` sockets are added child bones at the
-  hand bone's tail, 8-9 cm off the mesh. The goblin's are the renamed hand bones, at
-  the wrist, 2.3 cm from the surface.
+- Harpy, rounds 1-3 (hand-built rig, retired in round 7): the skeleton was off-centre (root
+  at x +0.068, shoulders at +0.26 / -0.125). The right forearm and hand bones (bone_18,
+  bone_19) carried no vertex with weight > 0.5. The right arm was skinned to the wing chain
+  (bone_11, bone_12), so `hand_r` did not follow the visible right hand, and the `hand_*`
+  sockets sat 8-9 cm off the mesh. The round 7 rig has 32 bones with `wing_*` chains, and
+  all four hand and grip sockets are 1.8-3.1 cm from the skin. The arms are still not
+  mirrored: `hand_r` is at x +0.48 and `hand_l` at -0.37, the elbows at +0.37 / -0.25.
+- Round 7, reported upstream: the harpy's hanging wing tips tear next to the legs in fly
+  (stretched sideways at 0%, a strip to the floor at 25-50%) and in walk. Its sword cut now
+  raises the arm above the head and pulls a flat sheet off the right armpit (25-50%). The
+  idle -> attack_melee frame-0 jump is 0.167 m (round 5 0.014). Walk dips to -0.023 m.
 - LOD files name their material `Material_0.001` rather than LOD0's `Material_0`
   (`docs/lods.md` says same name). Harmless here, because the material is overridden.
 - Round 4 (body-plan pilots), reported upstream in monster-forge `docs/TODO.md` E. Round 5
