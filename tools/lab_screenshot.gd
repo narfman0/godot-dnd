@@ -2,7 +2,10 @@
 ## headless servers: xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan ...
 ##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|move|all|idle,hit]
 ##         [ts=0.5|0.3,0.5,0.7] [views=three,front,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
-##         [gripoffset=0] [tag=_suffix]
+##         [gripoffset=0] [tag=_suffix] [prop_r=longsword] [prop_l=longbow|none] [bowstring=0]
+## prop_r / prop_l replace the registry loadout (both hands; "none" or a missing side leaves
+## that hand empty), like the monster-forge viewer's ?prop_r=&prop_l=. bowstring=0 hides bow
+## strings (Monster.set_bowstrings_visible).
 ## clips=move is the monster's locomotion clip: walk, else swim / fly (Monster.move_clip).
 ## Views: three (3/4 front), front (camera on -Z looking +Z), side (camera on +X), top,
 ## hand_*/grip_* (close-up on that socket with skeleton and socket axes; skipped when the
@@ -24,6 +27,14 @@ func _initialize() -> void:
 		opt[kv[0]] = kv[1] if kv.size() > 1 else "1"
 	load("res://scripts/monster.gd").apply_grip_offset = opt["gripoffset"] == "1"
 	var lab: Node3D = Lab.instantiate()
+	for side in ["r", "l"]:
+		if opt.has("prop_" + side):
+			lab.loadout_override[side] = "" if opt["prop_" + side] == "none" else opt["prop_" + side]
+	if opt.has("prop_r") or opt.has("prop_l"):
+		for side in ["r", "l"]:
+			if not lab.loadout_override.has(side):
+				lab.loadout_override[side] = ""
+	lab.show_bowstring = opt.get("bowstring", "1") == "1"
 	root.add_child(lab)
 	await process_frame
 	if not lab.has_method("select_monster"):

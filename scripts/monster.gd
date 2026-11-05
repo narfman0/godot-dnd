@@ -57,6 +57,9 @@ var blend_time := 0.0
 ## The clip play() last started ("" after play("rest")). A one-shot that ended (death) is no
 ## longer is_playing() but still holds this clip's last frame.
 var current_clip := ""
+## Bow strings (the `string` node of bow props) are drawn; set_bowstrings_visible() changes
+## it for the props held now, and attach_prop() applies it to new ones.
+var show_bowstring := true
 
 
 static func list_ids() -> PackedStringArray:
@@ -374,7 +377,10 @@ func attach_prop(prop: Node3D, socket: String) -> bool:
 		body.transform = Transform3D(Basis.from_euler(Vector3(deg_to_rad(r[0]), deg_to_rad(r[1]), deg_to_rad(r[2])), EULER_ORDER_XYZ), Vector3(t[0], t[1], t[2]))
 	if prop.has_meta("lod_meshes"):
 		_set_ranges(prop.get_meta("lod_meshes"), float(prop.get_meta("lod_radius")) * s, float(prop.get_meta("fov")))
+		if prop.get_meta("string_meshes", []).size() == prop.get_meta("lod_meshes").size():
+			_set_ranges(prop.get_meta("string_meshes"), float(prop.get_meta("lod_radius")) * s, float(prop.get_meta("fov")))
 	ba.add_child(prop)
+	set_bowstring_visible(prop, show_bowstring)
 	props[socket] = ba
 	return true
 
@@ -409,11 +415,13 @@ static func _set_ranges(meshes: Array, r: float, fov_deg: float) -> void:
 
 ## Real prop from assets/props/<id>/ (tools/sync_monsters.py), already in prop space: origin
 ## at the grip, +Y to the tip, -Z the edge / arrow / shield face, metres for a 1.8 m wielder.
-##   prop (meta: prop_id, manifest, grip_offset, offhand_grip)
+##   prop (meta: prop_id, manifest, grip_offset, offhand_grip, lod_meshes, string_meshes)
 ##     body                 grip_offset goes here (attach_prop, grip_* sockets only)
 ##       model              GLTFDocument scene of model.glb; two-handed props keep their
 ##                          "offhand_grip" node (the off hand's IK target)
-##         <mesh>, lod1..3  LOD files share LOD0's material, switched by visibility range
+##         <stave/blade>, lod1..3     LOD files share LOD0's material, switched by visibility range
+##         string, string_lod1..3     bows only: the straight string, its own node and
+##                                    material (manifest.prop.nodes), see set_bowstring_visible
 ## Returns null (see last_error) when the prop is not synced.
 static func load_prop(prop_id: String, fov_deg := 50.0) -> Node3D:
 	var dir := "%s/%s" % [PROP_ROOT, prop_id]
@@ -424,21 +432,24 @@ static func load_prop(prop_id: String, fov_deg := 50.0) -> Node3D:
 	var model := _gltf_scene(dir + "/model.glb")
 	if model == null:
 		return null
-	var meshes := model.find_children("*", "MeshInstance3D", true, false)
-	if meshes.size() != 1:
-		last_error = "%s: expected 1 mesh in model.glb, found %d" % [prop_id, meshes.size()]
+	var pm: Dictionary = man.get("prop", {})
+	# Bows carry two mesh nodes: the stave ("prop") and the string ("string"). Every other
+	# prop has one mesh.
+	var string_name := str(pm.get("nodes", {}).get("string", "")) if pm.get("nodes") is Dictionary else ""
+	var parts := _prop_meshes(model, string_name)
+	if parts[0] == null:
+		last_error = "%s: expected 1 mesh (plus an optional string) in model.glb, found %d" % [prop_id, parts[2]]
 		model.free()
 		return null
-	var lod0: MeshInstance3D = meshes[0]
+	var lod0: MeshInstance3D = parts[0]
 	_mipmap_material(lod0.mesh)
 	var lod_meshes: Array = [lod0]
+	var string_meshes: Array = [parts[1]] if parts[1] != null else []
 	var k := 1
 	while FileAccess.file_exists("%s/model_lod%d.glb" % [dir, k]):
 		var sc := _gltf_scene("%s/model_lod%d.glb" % [dir, k])
-		var src: Array = []
-		if sc:
-			src = sc.find_children("*", "MeshInstance3D", true, false)
-		if src.size() == 1:
+		var src: Array = _prop_meshes(sc, string_name) if sc else [null, null, 0]
+		if src[0] != null:
 			var mi := MeshInstance3D.new()
 			mi.name = "lod%d" % k
 			mi.mesh = src[0].mesh
@@ -447,6 +458,15 @@ static func load_prop(prop_id: String, fov_deg := 50.0) -> Node3D:
 				mi.set_surface_override_material(si, lod0.mesh.surface_get_material(mini(si, lod0.mesh.get_surface_count() - 1)))
 			lod0.get_parent().add_child(mi)
 			lod_meshes.append(mi)
+			if src[1] != null and string_meshes.size():
+				var s0: MeshInstance3D = string_meshes[0]
+				var smi := MeshInstance3D.new()
+				smi.name = "%s_lod%d" % [string_name, k]
+				smi.mesh = src[1].mesh
+				smi.transform = s0.transform
+				smi.set_surface_override_material(0, s0.mesh.surface_get_material(0))
+				s0.get_parent().add_child(smi)
+				string_meshes.append(smi)
 		if sc:
 			sc.free()
 		k += 1
@@ -457,16 +477,49 @@ static func load_prop(prop_id: String, fov_deg := 50.0) -> Node3D:
 	p.add_child(body)
 	model.name = "model"
 	body.add_child(model)
-	var pm: Dictionary = man.get("prop", {})
 	p.set_meta("prop_id", prop_id)
 	p.set_meta("manifest", man)
 	p.set_meta("grip_offset", pm.get("grip_offset", {}))
 	p.set_meta("offhand_grip", pm.get("offhand_grip"))
 	p.set_meta("lod_meshes", lod_meshes)
+	p.set_meta("string_meshes", string_meshes)
 	p.set_meta("lod_radius", lod0.mesh.get_aabb().size.length() * 0.5)
 	p.set_meta("fov", fov_deg)
 	_set_ranges(lod_meshes, lod0.mesh.get_aabb().size.length() * 0.5, fov_deg)
+	if string_meshes.size() == lod_meshes.size():
+		_set_ranges(string_meshes, lod0.mesh.get_aabb().size.length() * 0.5, fov_deg)
 	return p
+
+
+## [main mesh or null, string mesh or null, mesh count]: the main mesh is the one mesh not
+## named string_name; null when there is not exactly one.
+static func _prop_meshes(sc: Node, string_name: String) -> Array:
+	var main: MeshInstance3D = null
+	var str_mi: MeshInstance3D = null
+	var n_main := 0
+	var all := sc.find_children("*", "MeshInstance3D", true, false)
+	for mi in all:
+		if string_name != "" and mi.name == string_name:
+			str_mi = mi
+		else:
+			main = mi
+			n_main += 1
+	return [main if n_main == 1 else null, str_mi, all.size()]
+
+
+## Shows or hides a bow's string (all LODs). For a game that draws its own string, or pulls
+## it back with the arrow. No-op on props without one.
+static func set_bowstring_visible(prop: Node3D, on: bool) -> void:
+	for mi in prop.get_meta("string_meshes", []):
+		(mi as MeshInstance3D).visible = on
+
+
+## The same for every prop this monster holds.
+func set_bowstrings_visible(on: bool) -> void:
+	show_bowstring = on
+	for ba in props.values():
+		for prop in ba.get_children():
+			set_bowstring_visible(prop, on)
 
 
 static func _box(size: Vector3, pos: Vector3, color: Color, metal := 0.0) -> MeshInstance3D:

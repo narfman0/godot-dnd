@@ -4,7 +4,7 @@
 ##
 ## Mouse: drag to orbit, wheel to zoom. Keys: J/K (or PgDn/PgUp) monster, N/Shift+N clip,
 ## 0 rest pose, Space pause, L cycle LOD (auto, 0-3), A auto LOD, B skeleton, P props,
-## F frame, arrows orbit, +/- zoom.
+## S bow strings, F frame, arrows orbit, +/- zoom.
 extends Node3D
 
 const Monster = preload("res://scripts/monster.gd")
@@ -19,6 +19,11 @@ var cam_dist := 4.0
 var cam_target := Vector3(0, 1, 0)
 var show_skeleton := false
 var show_props := true
+var show_bowstring := true
+## Side ("r" / "l") -> prop id, replacing the registry loadout for every monster when not
+## empty, like the monster-forge viewer's ?prop_r=longsword&prop_l=longbow. "" leaves that
+## hand empty. lab_screenshot.gd prop_r= / prop_l= set it.
+var loadout_override := {}
 
 var _camera: Camera3D
 var _figure: Node3D
@@ -180,7 +185,7 @@ func _build_ui() -> void:
 	_status.add_theme_font_size_override("font_size", 12)
 	box.add_child(_status)
 	var help := Label.new()
-	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · G grip_offset · F frame"
+	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · S bow string · G grip_offset · F frame"
 	help.add_theme_font_size_override("font_size", 11)
 	box.add_child(help)
 
@@ -198,10 +203,13 @@ func select_monster(id: String) -> void:
 	_ui_monster.select(ids.find(id))
 	m.settle_clip = "idle"   # hit / attacks go back to idle; death holds its last frame
 	m.blend_time = 0.25      # cross-fade clip switches (no height pop from idle on the floor to a hover clip)
-	var loadout := loadout_for(m)
+	m.show_bowstring = show_bowstring
+	var loadout: Dictionary = loadout_for(m) if loadout_override.is_empty() else loadout_override
 	for side in loadout:
+		if loadout[side] == "":
+			continue
 		var socket: String = m.grip_socket(side)
-		if socket == "":   # e.g. merfolk-skirmisher: wields a spear, the rig has no hand_r
+		if socket == "":   # e.g. a wielder whose rig has no hand_r
 			push_warning("%s: no grip_%s / hand_%s bone, %s not shown" % [id, side, side, loadout[side]])
 			continue
 		var prop: Node3D = Monster.load_prop(loadout[side], FOV)
@@ -374,6 +382,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 				set_props_visible(not show_props)
 			KEY_F:
 				frame()
+			KEY_S:
+				show_bowstring = not show_bowstring
+				monster.set_bowstrings_visible(show_bowstring)
 			KEY_G:
 				Monster.apply_grip_offset = not Monster.apply_grip_offset
 				select_monster(monster.id)

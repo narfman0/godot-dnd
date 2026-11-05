@@ -427,7 +427,7 @@ func _props() -> void:
 	if d == null:
 		print("no props synced")
 		return
-	var rows := ["| prop | LODs (tris) | AABB x,y,z m | length_check m | grip_offset deg | offhand_grip node |", "|---|---|---|---|---|---|"]
+	var rows := ["| prop | LODs (tris) | AABB x,y,z m | length_check m | grip_offset deg | offhand_grip node | string |", "|---|---|---|---|---|---|---|"]
 	for pid in d.get_directories():
 		var p: Node3D = Monster.load_prop(pid)
 		if p == null:
@@ -449,11 +449,28 @@ func _props() -> void:
 			meas = maxf(bb.size.x, bb.size.y)
 		_check(absf(meas - float(lc.get("target_m", meas))) < 0.02, "prop %s: length %.3f, target %s" % [pid, meas, lc.get("target_m")])
 		_check(bb.has_point(Vector3.ZERO) or bb.grow(0.01).has_point(Vector3.ZERO), "prop %s: origin (grip) outside the mesh bounds" % pid)
+		var strings: Array = p.get_meta("string_meshes", [])
+		var sname = (pm.get("nodes", {}) as Dictionary).get("string") if pm.get("nodes") is Dictionary else null
+		var str_txt := "-"
+		if sname != null:
+			# Bows: the string is its own node and material in model.glb and every LOD, and
+			# set_bowstring_visible hides all of them.
+			_check(strings.size() == meshes.size(), "prop %s: string in %d of %d LODs" % [pid, strings.size(), meshes.size()])
+			for smi in strings:
+				_check(String((smi as MeshInstance3D).get_active_material(0).resource_name) == "bowstring", "prop %s %s: string material %s, not bowstring" % [pid, smi.name, (smi as MeshInstance3D).get_active_material(0).resource_name])
+			Monster.set_bowstring_visible(p, false)
+			var hidden := strings.all(func(x): return not x.visible)
+			Monster.set_bowstring_visible(p, true)
+			_check(hidden and strings.all(func(x): return x.visible), "prop %s: set_bowstring_visible does not toggle every string LOD" % pid)
+			var sb: AABB = strings[0].mesh.get_aabb()
+			str_txt = "%d LODs, %d tris, y %.2f..%.2f, z %.2f..%.2f, hide ok" % [strings.size(), strings[0].mesh.surface_get_array_index_len(0) / 3, sb.position.y, sb.end.y, sb.position.z, sb.end.z]
+		else:
+			_check(strings.is_empty(), "prop %s: string meshes without manifest.prop.nodes.string" % pid)
 		var oh = p.find_child("offhand_grip", true, false)
 		if pm.get("offhand_grip") != null:
 			_check(oh != null, "prop %s: manifest has offhand_grip but model.glb has no such node" % pid)
-		rows.append("| %s | %d (%s) | %.2f, %.2f, %.2f | %s %.2f | %s | %s |" % [pid, meshes.size(), "/".join(tris), bb.size.x, bb.size.y, bb.size.z, ax, meas,
-			p.get_meta("grip_offset").get("rotation_deg_xyz", "-"), ("%s" % (oh as Node3D).position) if oh else "-"])
+		rows.append("| %s | %d (%s) | %.2f, %.2f, %.2f | %s %.2f | %s | %s | %s |" % [pid, meshes.size(), "/".join(tris), bb.size.x, bb.size.y, bb.size.z, ax, meas,
+			p.get_meta("grip_offset").get("rotation_deg_xyz", "-"), ("%s" % (oh as Node3D).position) if oh else "-", str_txt])
 		p.free()
 	print("\n".join(rows))
 
@@ -462,9 +479,16 @@ func _props() -> void:
 ## (+Y) and edge/arrow (-Z) point in the world.
 func _loadout(m: Node3D) -> String:
 	var lo: Dictionary = Lab.loadout_for(m)
+	var out := []
 	if lo.is_empty():
-		return "  loadout: none (wields %s)" % [m.info.get("wields", [])]
-	var out := ["  loadout: %s (wields %s, shield %s)" % [lo, m.info.get("wields", []), m.info.get("shield", false)]]
+		if not m.has_socket("grip_r"):
+			return "  loadout: none (wields %s)" % [m.info.get("wields", [])]
+		# Unarmed in the registry but the rig has a right grip (harpy): test it with a
+		# longsword attached by hand, the way the lab's loadout_override does.
+		lo = {"r": "longsword"}
+		out.append("  loadout: none (wields %s); test prop %s on grip_r" % [m.info.get("wields", []), lo])
+	else:
+		out.append("  loadout: %s (wields %s, shield %s)" % [lo, m.info.get("wields", []), m.info.get("shield", false)])
 	for side in lo:
 		var sock: String = m.grip_socket(side)
 		var p: Node3D = Monster.load_prop(lo[side])
@@ -492,8 +516,16 @@ func _loadout(m: Node3D) -> String:
 				continue
 			var body := (ba.get_child(0) as Node3D).get_node("body") as Node3D
 			var g := body.global_transform
-			out.append("    %s @50%% %s on %s: grip %s, tip (+Y) %s, edge/arrow (-Z) %s, scale %.3f" % [clip, lo[side], m.grip_socket(side),
-				g.origin, g.basis.y.normalized(), -g.basis.z.normalized(), g.basis.y.length()])
+			var pos := _skinned(m, m.lods[0], false)
+			var near := INF
+			var n5 := 0
+			for v in pos:
+				var dd := v.distance_to(g.origin)
+				near = minf(near, dd)
+				if dd < 0.05:
+					n5 += 1
+			out.append("    %s @50%% %s on %s: grip %s (nearest skin %.3f m, %d verts within 5 cm), tip (+Y) %s, edge/arrow (-Z) %s, scale %.3f" % [clip, lo[side], m.grip_socket(side),
+				g.origin, near, n5, g.basis.y.normalized(), -g.basis.z.normalized(), g.basis.y.length()])
 	for side in lo:
 		m.detach_prop(m.grip_socket(side))
 	m.play("rest")
@@ -538,8 +570,17 @@ func _ground(m: Node3D) -> String:
 		var jin := _max_dist(idle0, first) if idle0.size() and c != "idle" else 0.0
 		var jout := _max_dist(last, idle0) if idle0.size() and c != "idle" and not c in m.HOLD_LAST else 0.0
 		var seam := _max_dist(first, last) if c in m.LOOPING else -1.0
-		out.append("    %s: %.3f / %.3f / %.3f; root y %.3f..%.3f; jump in %.3f out %.3f%s" % [c, lo0, lo_min, lo1, ry.x, ry.y, jin, jout,
-			"" if seam < 0 else "; loop seam %.4f" % seam])
+		var end_txt := ""
+		if c in m.HOLD_LAST:
+			# How the body ends: last-frame bounds (lying flat = low top) and how far the
+			# root bone turned (a planted base keeps ~0).
+			var eb := _aabb(last)
+			end_txt = "; last frame bbox %.2f x %.2f x %.2f (top y %.3f, rest %.3f), root bone %s turned %.1f deg, moved %.2f m, scale %s" % [
+				eb.size.x, eb.size.y, eb.size.z, eb.end.y, m.aabb.end.y, sk.get_bone_name(0),
+				rad_to_deg(sk.get_bone_pose_rotation(0).angle_to(sk.get_bone_rest(0).basis.get_rotation_quaternion())),
+				sk.get_bone_pose_position(0).distance_to(sk.get_bone_rest(0).origin), sk.get_bone_pose_scale(0)]
+		out.append("    %s: %.3f / %.3f / %.3f; root y %.3f..%.3f; jump in %.3f out %.3f%s%s" % [c, lo0, lo_min, lo1, ry.x, ry.y, jin, jout,
+			"" if seam < 0 else "; loop seam %.4f" % seam, end_txt])
 		if lo_min < -0.03:
 			_warn("%s/%s: geometry %.3f m below the floor" % [m.id, c, lo_min])
 		if c in m.HOLD_LAST and absf(lo1) > 0.05:

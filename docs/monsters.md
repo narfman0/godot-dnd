@@ -11,6 +11,8 @@ godot res://scenes/monster_lab.tscn                     # look at them
 godot --headless -s res://tools/check_monsters.gd       # import test, prints ALL PASS
 xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan \
     -s res://tools/lab_screenshot.gd -- /tmp/shots clips=all ts=0.5 views=three,grip_r,lods
+# any loadout (like the forge viewer's ?prop_r=&prop_l=), bow strings off:
+#   ... -- /tmp/shots ids=harpy clips=attack_melee prop_r=longsword prop_l=none bowstring=0
 ```
 
 `assets/monsters/` and `assets/props/` are git-ignored (generated art: ~15 MB per monster,
@@ -96,7 +98,7 @@ again on the nine body-plan pilots in round 4 (below).
 | LOD material | the LOD files have a material (`Material_0.001`, not LOD0's name) without textures. The loader applies LOD0's material as a surface override. |
 | Clips | one armature-only GLB per clip, listed in `manifest.anim.clips`. All tracks are `Armature/Skeleton3D:<bone>` and bind 100% by bone name, for every clip of every pilot (36 clips; table below) |
 | Root motion | none: the clips are in place, and the root bone ends where it starts |
-| Grip sockets | `grip_r` / `grip_l`: non-deforming children of `hand_r` / `hand_l`, at the centre of the fist (goblin: 2 cm from the hand bone, 53-66 vertices within 5 cm), in prop space. At rest +Y points forward (-Z) and +Z points up (+Y), so a sword points forward with its -Z edge down. Goblin and harpy have them. |
+| Grip sockets | `grip_r` / `grip_l`: non-deforming children of `hand_r` / `hand_l`, at the centre of the fist (goblin: 2 cm from the hand bone, 53-66 vertices within 5 cm), in prop space. At rest +Y points forward (-Z) and +Z points up (+Y), so a sword points forward with its -Z edge down. Goblin, harpy, ghost and (since round 5) merfolk-skirmisher have them. |
 
 Round 3 run (2026-11-04, after `sync_monsters.py --all`), tracks bound / total per clip:
 
@@ -192,6 +194,84 @@ views three and side), what they show:
   flattened.
 - No monster in round 4 has a prop, and no prop appears on them.
 
+Round 5 (2026-11-04): re-sync after monster-forge df2a463, 81c8194 and 6a804d3 (merfolk right
+arm, eagle standing on its feet, harpy right-arm re-weight, lifted idles, ghost / fungus /
+swarm / merfolk deaths, props round 2). `check_monsters.gd` ALL PASS on 15 monsters and 32
+props. Clips and tracks of the monsters that changed (every clip binds 100%):
+
+| id | clips (bound/total) | rest | lowest y idle / move clip, first frame | idle -> move, largest vertex step per frame: instant / 0.25 s cross-fade (round 4) | idle -> one-shots (attack, hit, death) jump |
+|---|---|---|---|---|---|
+| giant-eagle | attack_melee 15/15, death 15/15, fly 18/18, hit 16/16, idle 18/18 | stands on its talons, lowest 0.000, bbox 3.97 x 3.81 x 3.40 (round 4: 4.16 tall) | 0.357 / fly 0.373 (min 0.321 / 0.320) | 1.070 / 0.154 m (1.312 / 0.173) | 1.01-1.03 m: the one-shots start on the floor (0.000) |
+| giant-octopus | unchanged counts | | 0.348 / swim 0.215 | 0.339 / 0.119 m (0.414 / 0.130) | 0.55 m: one-shots start on the floor |
+| merfolk-skirmisher | attack_melee 15/15, attack_ranged 15/15, death 11/11, hit 18/18, idle 18/18, swim 14/14 | sockets now `hand_r`/`grip_r` too | 0.180 / swim 0.659 (swim min 0.431) | 1.029 / 0.155 m (1.177 / 0.152) | 0.19 m: one-shots start on the floor |
+| ghost | death 15/15 (was 13) | | 0.254 / fly 0.211 | 0.743 / 0.111 m (0.744 / 0.111) | 0.04-0.15 m |
+| harpy | attack_melee 15/15 (was 14) | | | 0.139 / 0.044 m (walk) | |
+| violet-fungus | death 4/4 (was 6) | | | | |
+| swarm-of-rats | death 2/2 (was 1) | | | | |
+
+- **Idle -> move: the height now matches, the pop does not go away.** The eagle's idle hovers
+  at its fly height (0.357 vs 0.373 m, minimum 0.321 vs 0.320). The octopus idle body is at
+  the swim lift, but its lowest vertex is 0.348 m against swim's 0.215 (the tentacles hang
+  differently; the check still warns 0.13 m). The merfolk idle floats at 0.180 m, while swim
+  pitches the body forward and starts at 0.659. An instant switch still moves some vertex
+  0.34 m (octopus) to 1.03-1.07 m (merfolk, eagle) in one frame: wing and body-pitch pose
+  differences, not height. With `blend_time = 0.25` it is 0.12-0.16 m, the same as round 4.
+- **New pop: lifted idle vs grounded one-shots.** The eagle, octopus and merfolk attack, hit
+  and death clips all start with the lowest vertex at y = 0, while their idle now hovers.
+  `settle_clip = "idle"` therefore lifts them 0.19-0.36 m after every hit or attack, and the
+  first frame of each one-shot drops them. Largest vertex jump idle frame 0 -> one-shot frame
+  0: eagle 1.01-1.03 m, octopus 0.55 m, merfolk 0.19 m (round 4: idle was on the floor, so
+  these matched). Reported upstream.
+- **merfolk-skirmisher spear.** `loadout_for` puts the registry spear on `grip_r`; it is drawn
+  in the lab and the screenshots. Grip 3.3-3.4 cm from the skin, 16-20 vertices within 5 cm,
+  in every sampled frame. The rest pose has the right arm raised, so idle holds the spear
+  horizontally above the head (grip at y 1.87 m, tip forward (0, 0.20, -0.98)).
+  attack_melee: 25% wind-up overhead with the shaft across behind the head; 50% chop down,
+  point toward the floor in front (tip (-0.35, -0.93, -0.11)); 75% swept across the body,
+  horizontal, tip pointing back-right. It is a sword cut, not a spear thrust. Death: lies on
+  the floor on its side, left arm along the body, tail fin standing up (top 0.83 m). The
+  dead spear is out of the lab's frame.
+- **harpy `grip_r`** (registry unarmed; tested with a longsword through `loadout_override`
+  in the lab and screenshots, and by the check, which attaches a longsword to unarmed rigs
+  that have `grip_r`). Grip-to-skin during walk 0.029 m with 14 vertices within 5 cm (round 4:
+  0.117 m, none within 10 cm). attack_melee 25/50/75%: 0.009 / 0.020 / 0.024 m (round 4:
+  0.033 / 0.269 / 0.067). Screenshots: the hilt is inside the gauntlet at idle, blade
+  forward, edge down; the cut raises the blade upright in front of the right shoulder (50%)
+  and ends low across the body to the left (75%). The left side is unchanged:
+  `grip_l` 0.112 m and `hand_l` 0.082 m from the skin, no vertex within 10 cm of the grip,
+  so a left-hand prop would float beside the hand.
+- **giant-eagle** stands on its talons at rest (lowest vertex 0.000, tail fan clear of the
+  floor). Idle and fly at 50% look alike from the side: upright body, wings up, one leg
+  forward, talons about 0.35 m above the floor.
+- **ghost death** lies flat: last frame 1.50 x 0.78 x 2.23 m, robe spread on the floor, the
+  head end the highest point (0.78 m); no vertical sheet. Hit no longer dips below the floor (min 0.000,
+  was -0.010).
+- **violet-fungus death** keeps the base planted: root bone `spine_00` turned 0.0 deg and moved
+  0.00 m at the last frame. The stalk breaks over just above the base and the cap ends
+  standing on its rim beside it, a vertical disc 1.22 m high.
+- **swarm-of-rats death** scatters and sinks: root scale (1.7, 0.3, 1.7), turned 12 deg, last
+  frame 1.38 x 0.43 x 2.47 m. With one bone this is a uniform squash, so each rat is also
+  flattened to 30% height; it reads as a spread pile of flattened rats.
+- **Bow strings.** longbow and shortbow: `string` in all 4 LODs, 8 tris, material
+  `bowstring`, `set_bowstring_visible(false)` hides all four (check). On the goblin with a
+  longbow (`prop_l=longbow`): idle carries the bow low and level with the stave through
+  the fist; attack_ranged holds it upright, with the straight string behind the stave. The
+  string passes through the goblin's left forearm and shoulder. `bowstring=0` removes
+  exactly the string pixels (image diff).
+- **Whip** (procedural, 992 tris, 2.50 m, 1.39 m on the goblin): the handle is in the right
+  fist and the lash runs forward and sags toward the tip. It is one rigid mesh, so in
+  attack_melee it is a straight rod held overhead. A real lash needs bones or a
+  simulation in the game.
+- **glaive / harpoon / greatclub** on the goblin's `grip_r` (`prop_r=`): at idle each points
+  forward (-Z) with the shaft through the fist, the butt behind the hand. The glaive's convex
+  edge faces down and its back spikes face up (the -Z edge is down at rest, as for swords).
+  The harpoon's barbed head is forward and the greatclub's heavy end is forward. In
+  attack_melee all three are raised overhead with the head up. They are held one-handed:
+  there is no off-hand IK yet.
+- **Loader change:** `load_prop` required exactly one mesh, so the new bows failed to load
+  (would have fallen back to the CSG placeholder). It now takes the stave plus an optional
+  `string` node (above).
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -246,7 +326,7 @@ because runtime meshes have no generated LODs.
 ### Sockets and props
 
 **Where props go.** Held props go on `grip_socket("r")` / `grip_socket("l")`: `grip_r` /
-`grip_l` when the rig has them (goblin, harpy), else `hand_r` / `hand_l`.
+`grip_l` when the rig has them (goblin, harpy, ghost, merfolk), else `hand_r` / `hand_l`.
 `attach_prop(prop, socket)` adds a `BoneAttachment3D` (`bone_name = socket`) under the
 skeleton, parents the prop to it, and scales it by `scale_m / 1.8`. This scaling is meant
 for upright bodies; the loader does not check the body plan, since only handed bodies get
@@ -254,6 +334,13 @@ props.
 
 **Real props.** `Monster.load_prop(id)` loads `assets/props/<id>/`:
 - **Tree:** `prop_<id>` holds `body`, which holds `model` (the GLTF scene).
+- **Bow strings:** bows have two mesh nodes, the stave (`prop`) and a straight string
+  (`string`, 8 tris, material `bowstring`), named in `manifest.prop.nodes`, in model.glb and
+  every LOD. The loader keeps the string with its own material, adds `string_lod1-3` beside
+  it with the same visibility ranges as the stave, and lists them in the prop's
+  `string_meshes` meta. `Monster.set_bowstring_visible(prop, on)` hides or shows them, and
+  `monster.set_bowstrings_visible(on)` does that for every held prop (`show_bowstring`
+  applies to props attached later). Lab key `S`, `lab_screenshot.gd bowstring=0`.
 - **LODs:** `model_lod1-3` meshes are added beside LOD0 with LOD0's material and
   switched by visibility range. Their radius is rescaled when the prop is attached.
 - **Metadata:** `manifest`, `grip_offset`, `offhand_grip`.
@@ -273,7 +360,8 @@ monster-forge's `viewer/app.js`):
 - as `body.transform = (Basis.from_euler(rotation_deg_xyz, EULER_ORDER_XYZ), translation_m)`;
 - Godot's XYZ order is X·Y·Z, the same as three.js 'XYZ'.
 
-Melee weapons have none. Bows, crossbows, pistols and the shield have +90° about X.
+Melee weapons and (since props round 2) bows have none. Crossbows, pistols and the shield
+have +90° about X.
 `Monster.apply_grip_offset` (lab key `G`, `lab_screenshot.gd gripoffset=0`) turns it off
 to compare.
 
@@ -284,6 +372,9 @@ prop's manifest:
 - A shield takes the left hand only when the record has `shield` and nothing else claimed
   that hand.
 - A two-handed prop (`grip: 2`) clears the left hand.
+- `loadout_override` (`{"r": id, "l": id}`, `""` = empty hand) replaces this for every
+  monster, like the forge viewer's `?prop_r=&prop_l=`; `lab_screenshot.gd prop_r=longsword
+  prop_l=none` sets it. Used to test unarmed rigs with grips (harpy) and props no pilot wields.
 
 So the goblin carries a scimitar on `grip_r` and a shortbow on `grip_l`; its shield is not
 shown, and stowing is a game job (below). Monsters with no `wields` (the harpy and the
@@ -352,6 +443,7 @@ Without the sky, metallic surfaces render nearly black. Some pilots export metal
 | `B`, checkbox | skeleton overlay (sockets magenta, socket +Y green, -Z red) |
 | `P`, checkbox | props |
 | `F` | frame the monster |
+| `S` | show / hide bow strings |
 | `G` | toggle `grip_offset` on grip sockets (reloads the monster) |
 
 The status line shows the LOD that auto mode draws, the camera distance and the switch
@@ -373,7 +465,9 @@ distances.
   the wrist, 2.3 cm from the surface.
 - LOD files name their material `Material_0.001` rather than LOD0's `Material_0`
   (`docs/lods.md` says same name). Harmless here, because the material is overridden.
-- Round 4 (body-plan pilots), reported upstream in monster-forge `docs/TODO.md` E:
+- Round 4 (body-plan pilots), reported upstream in monster-forge `docs/TODO.md` E. Round 5
+  re-checked them: the ghost sheet, the merfolk hand, the fungus root clump and the swarm
+  squash are fixed upstream; the idle -> move pop is not (see "Round 5"):
   - The ghost's robe hem stays upright as a vertical sheet at the end of death.
   - The merfolk has no right arm socket, so its spear is never shown, and its
     attack_melee barely moves.
@@ -381,5 +475,10 @@ distances.
   - The violet fungus topples with its root clump.
   - The octopus, merfolk and eagle change height between idle and swim/fly by design.
     The game cross-fades (`blend_time`) or adds a take-off.
+- Round 5, reported upstream: the eagle, octopus and merfolk now idle in the air but their
+  attack, hit and death clips start on the floor (0.19-1.03 m jump on every settle to idle);
+  the harpy's left `grip_l` is 11 cm off the skin; the merfolk's spear attack is a sword
+  cut; the bow string passes through the goblin's forearm in attack_ranged; the whip is a
+  rigid mesh.
 - With `--verbose`, Godot warns "Buffer view byte stride should be declared for vertex
   attributes". There are no warnings without `--verbose`.
