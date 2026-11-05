@@ -645,6 +645,67 @@ Screenshots (`lab_screenshot.gd`, Xvfb):
   up, at 3.5 m. The tail hangs behind. The dark spike fan from the reference's stick is still
   in front of the chest at the grip.
 
+Round 11 (2026-11-05): owlbear, wolf, centaur-trooper, goblin-warrior and merfolk-skirmisher,
+after monster-forge 81628b1 and c424467 (4-bone tail chains rooted at the rump, limp tails in
+death, every clip starting from the idle's tail pose, arm swing from the loadout). The sync has
+no dry run, so a scratch script compared every synced monster and prop against upstream with
+`sync_monsters.py`'s own functions. Exactly these five differed, and the props were unchanged.
+Synced with `--ids`: owlbear, wolf and centaur 10 files each (rig, 3 LODs, 5 clips,
+monster.json), goblin `anims/walk.glb`, merfolk `anims/swim.glb`. A second compare finds
+nothing left. `check_monsters.gd` on all 17 synced monsters: ALL PASS (32 props), every clip
+binds 100%, and the WARNs are back to the three fly/swim height changes (the centaur's four
+-0.0301 warnings are gone).
+
+| | owlbear | wolf | centaur-trooper | goblin-warrior | merfolk-skirmisher |
+|---|---|---|---|---|---|
+| bones | 24 (20 + `tail_00..03` on `bone_11`) | 32 (28 + `tail_00..03` on `bone_17`; round 10 34) | 42 (`tail_00..03` on `bone_15`; round 10 44) | 40 | 57 |
+| tracks bound | attack 24, death 24, hit 24, idle 23, walk 22 | 25, 27, 25, 26, 22 | 22, 23, 23, 25, 22 | walk 10 (round 10 9) | swim 16 |
+| lowest y per clip (49 samples) | attack -0.011, death -0.012, hit -0.008, idle -0.008, walk -0.024 (`bone_10`, a foot, at 43%) | -0.002, -0.009, -0.001, -0.001, -0.002 | -0.024 in every clip (`tail_03`; round 10 -0.030 / -0.032) | walk -0.000 | swim 0.428 (lifted) |
+| frame 0 vs idle frame 0: one-shots / move | 0 / 0.219 | 0 / 0.197 | 0 (death round 10 0.119) / 0.161 (round 10 0.185) | 0 / 0.072 | 0.059 / 1.040 (swims up) |
+| idle-cycle worst: idle wander; one-shots; move | 0.120; 0.120; 0.219 | 0.091; 0.091; 0.198 | 0.128; 0.128; 0.259 (round 10 0.156; death 0.260; 0.265) | 0.050; 0.050; 0.072 | 0.134; 0.076; 1.091 |
+| death, last frame: lowest tail vertex / `tail_03` head y (body top) | 0.393 / 0.619 (1.863) | 0.131 / 0.211 (0.572; round 10 0.18) | 0.652 / 0.859 (1.579; round 10 0.867) | - | - |
+| grip +Y change over the move clip | - | - | `grip_r` (pike) 0.0 deg (round 10 23.4) | `grip_r` 11.9, `grip_l` (bow) 0.0 | `grip_r` (spear) 2.9 |
+
+Every frame-0 number equals `from_idle_m` and every idle-cycle worst equals `from_idle_max_m`
+in `anims/clips.json` within 0.4 mm (for example owlbear walk 0.2189 / 0.2193, centaur walk
+0.1610 / 0.2585, merfolk 0.059 / 0.0758 and swim 1.0396 / 1.0906). The lying tails' low points
+match Blender's 0.13 / 0.39 / 0.65 m. The grip angles match the clip report (pike 0, bow 0,
+scimitar 11.9, spear in swim 2.9 deg). The centaur's walk frame-0 vertex is now the tail end
+(`tail_03`), not a leg.
+
+**Pike tip over the walk** (the head, 2.73 m along `grip_r` +Y, scale 1.0). Round 10's clips
+were reloaded as a temporary lab monster from monster-forge's tails3 backup (02:44, the files
+round 10 synced):
+- Round 10: tip y 0.40..1.91 m (0% 1.52, 25% 0.48, 50% 0.81, 75% 1.82), z -3.08..-3.42.
+- Round 11: tip y 1.13..1.16 m, z -3.30..-3.37, `grip_r` +Y (0, 0, -1) throughout: level and
+  straight ahead.
+
+Screenshots (`lab_screenshot.gd`, Xvfb):
+- **owlbear idle and walk 0/50%, side and back:** the fan tail (white-and-brown barred) hangs
+  from the rump over the hind legs nearly to the floor. In idle and at walk 0% it is centred.
+  At walk 50% it swings to one side, and a thin light sliver shows along its edge. From the
+  side it hangs behind the haunches and does not follow a leg. No tear.
+- **owlbear death, end, side, back and three-quarter:** lying on its side. From behind, the fan
+  bends down off the rump but stays well above the floor (0.39 m), with a dark rim around its
+  base where it bends.
+- **wolf walk 25/75%, back and side:** round 10's dark patch beside the hind hock at 75% is
+  down to a sliver of a few pixels at the tail's edge. At 25% the end is rounded, not squared
+  off. From the side the tail hangs behind the haunches.
+- **wolf death, end, side and back:** lying on its side. The tail curls down from the rump
+  under the body toward the floor (0.13 m). No tear.
+- **centaur walk 0/25/50/75%, side (plus three-quarter, top and front at 50%):** the pike stays
+  level and straight forward at the height of the horse's back in all four frames (round 10:
+  head near the floor at 25%, above head height at 75%). Its butt end (0.77 m behind the grip;
+  `grip_r` at x -0.07) runs back into the horse's chest, as the top view shows.
+- **centaur death, end, back and side:** the tail sheet droops from the rump and its far end
+  bends down toward the floor (round 10: level, sticking out beside the rump). It does not
+  reach the floor (0.65 m).
+- **goblin walk 0/50%, side and three-quarter, longsword + longbow:** the bow is held the same
+  in both frames and the same as at idle frame 0: horizontal, limbs fore and aft at the hip
+  (the lab's +90° `grip_offset`, see "Sockets and props"). The sword swings a little (11.9°).
+- **merfolk swim 0/25/50/75%, side and three-quarter:** the spear is held steady, head forward
+  and down at the waist, while the tail beats.
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -874,7 +935,7 @@ distances.
 - Round 6, reported upstream: the centaur's tail has no bones and swings with the near hind
   leg; the reference's arrow-shaft stick shreds in the thrust; there is no left arm, and its
   two-handed pike gets the upright-body prop scale (1.333, 4.7 m long); death dips to
-  -0.033 m. Round 10: the tail has its own chain (`tail_00..05`) and hangs and
+  -0.033 m. Round 10: the tail has its own chain (`tail_00..05`, 4 bones since round 11) and hangs and
   swings behind the hind legs in the walk. It does not kick. The pike is 3.5 m since round
   9. The stick fan and the 8-9 cm grip in the thrust remain. The eagle's idle -> fly instant switch is the largest pop of all (1.75 m), and
   its attack wind-up shows a gap at the neck. The merfolk's attack_ranged still starts from
@@ -884,5 +945,13 @@ distances.
   attack and hit, which trips the check's -0.03 WARN by 0.1 mm. In death, both tails stay
   level with the rolled body instead of lying on the floor (the centaur's is 0.87 m up). The
   wolf's walk at 75% shows a dark fold at the tail end beside the hind hock (back view).
+  Round 11 re-checked them (see "Round 11"): the centaur's death starts at 0, its tail end
+  sits at -0.024 m (no WARN), and the wolf's fold is down to a sliver. The tails now droop in
+  death but still do not reach the floor (lowest tail vertex wolf 0.13 m, owlbear 0.39,
+  centaur 0.65; open upstream, it needs softer tail weights at the base).
+- Round 11, reported upstream: the walk's pike is level now (tip y 1.13-1.16 m, was
+  0.40-1.91), but its butt end runs back into the horse's chest. The owlbear's fan tail shows
+  a thin light sliver at its edge at walk 50% (back view) and a dark rim at its base in the
+  lying pose.
 - With `--verbose`, Godot warns "Buffer view byte stride should be declared for vertex
   attributes". There are no warnings without `--verbose`.
