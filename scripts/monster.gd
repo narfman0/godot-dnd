@@ -60,6 +60,17 @@ var current_clip := ""
 ## Bow strings (the `string` node of bow props) are drawn; set_bowstrings_visible() changes
 ## it for the props held now, and attach_prop() applies it to new ones.
 var show_bowstring := true
+## Swarms made as ONE unit (monster.json swarm_unit): the other units spawn_swarm() made,
+## children of this one (the leader, which stays at the origin). Each follows the leader's
+## clip with its own phase (swarm_phase / swarm_delay), see _process.
+var swarm_units: Array[Node3D] = []
+## Fraction of a looping clip this unit runs ahead of the leader (0 for the leader).
+var swarm_phase := 0.0
+## Seconds this unit starts a one-shot (attack, hit, death) after the leader.
+var swarm_delay := 0.0
+## Height above the leader this unit flies / swims at (0 for ground units). Units fall to the
+## floor over a HOLD_LAST clip (death): the clip only drops the unit to its own y = 0.
+var swarm_height := 0.0
 
 
 static func list_ids() -> PackedStringArray:
@@ -304,8 +315,12 @@ func move_clip() -> String:
 	return ""
 
 
-## Plays a clip from the start; "" or "rest" stops and shows the bind pose.
+## Plays a clip from the start; "" or "rest" stops and shows the bind pose. A swarm leader
+## starts its units too (they keep their phase, see _process).
 func play(clip: String) -> void:
+	for u in swarm_units:
+		u.blend_time = blend_time
+		u.play(clip)
 	if clip == "" or clip == "rest" or not anim.has_animation(clip):
 		anim.stop()
 		skeleton.reset_bone_poses()
@@ -315,9 +330,102 @@ func play(clip: String) -> void:
 	anim.play(clip, blend_time)
 
 
+## monster.json swarm_unit ({unit, plan, rig_template, size, scale_m, swarm: {body_plan, size,
+## scale_m}}) or {} when this monster is not a swarm made as one unit.
+func swarm_info() -> Dictionary:
+	var su = info.get("swarm_unit")
+	return su if su is Dictionary else {}
+
+
+## A swarm made as one unit is shown as count units (this one included) scattered over the
+## swarm's footprint, a disc of diameter swarm.scale_m. Units that fly or swim (avian /
+## aquatic plan, or a fly / swim / hover move clip) also spread over a height band of
+## 0.5 x swarm.scale_m above the leader. Deterministic (seeded by the id), each unit turned up
+## to +-35 deg off the leader's -Z facing, with a staggered phase on looping clips (golden
+## ratio steps, so no two units are in step) and a 0-0.35 s delay on one-shots. Returns the
+## units added (count - 1); none when this is not a swarm unit. Clears earlier units.
+func spawn_swarm(count := 12, fov_deg := 50.0) -> Array[Node3D]:
+	for u in swarm_units:
+		u.queue_free()
+	swarm_units.clear()
+	var su := swarm_info()
+	if su.is_empty() or count < 2:
+		set_process(false)
+		return swarm_units
+	var sw: Dictionary = su.get("swarm", {})
+	var r: float = float(sw.get("scale_m", 1.5)) * 0.5
+	var unit_r: float = float(su.get("scale_m", info.get("scale_m", 0.3))) * 0.5
+	var volume: bool = str(su.get("plan", "")) in ["avian", "aquatic"] or move_clip() in ["fly", "swim", "hover"]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(id)
+	for k in range(1, count):
+		var u: Node3D = (load("res://scripts/monster.gd") as GDScript).load_monster(id, fov_deg)
+		if u == null:
+			break
+		# Sunflower spiral over the disc (even cover), jittered by a third of a unit.
+		var rad := (r - unit_r) * sqrt(float(k) / float(count - 1))
+		var ang := k * 2.39996323 + rng.randf_range(-0.3, 0.3)
+		var pos := Vector3(cos(ang) * rad, 0.0, sin(ang) * rad)
+		pos += Vector3(rng.randf_range(-1, 1), 0, rng.randf_range(-1, 1)) * unit_r * 0.66
+		if volume:
+			pos.y = rng.randf_range(0.0, r)
+			u.swarm_height = pos.y
+		u.position = pos
+		u.rotation.y = rng.randf_range(-0.6, 0.6)
+		u.swarm_phase = fposmod(k * 0.618034, 1.0)
+		u.swarm_delay = rng.randf_range(0.0, 0.35)
+		u.name = "unit_%d" % k
+		u.show_bowstring = show_bowstring
+		add_child(u)
+		u.set_lod(lod_mode)
+		swarm_units.append(u)
+	set_process(not swarm_units.is_empty())
+	play(current_clip)
+	return swarm_units
+
+
+## The leader's AABB merged with every swarm unit's (this node's space); aabb alone otherwise.
+func swarm_aabb() -> AABB:
+	var b := aabb
+	for u in swarm_units:
+		b = b.merge(u.transform * u.aabb)
+	return b
+
+
+## Swarm leader only: every unit shows the leader's clip at the leader's time plus its phase
+## (loops) or minus its delay (one-shots), so seeking or pausing the leader moves the swarm.
+func _process(_delta: float) -> void:
+	if swarm_units.is_empty() or anim == null:
+		return
+	var clip := current_clip
+	var playing := clip != "" and anim.assigned_animation == clip
+	for u in swarm_units:
+		u.anim.speed_scale = anim.speed_scale
+		if u.current_clip != clip:
+			u.blend_time = blend_time
+			u.play(clip)
+		if not playing or not u.anim.has_animation(clip):
+			u.position.y = u.swarm_height
+			continue
+		var a: Animation = u.anim.get_animation(clip)
+		var t := anim.current_animation_position
+		if a.loop_mode != Animation.LOOP_NONE:
+			t = fposmod(t + u.swarm_phase * a.length, a.length)
+		elif not anim.is_playing():   # the leader's one-shot ended (death holds): so do the units
+			t = a.length
+		else:
+			t = clampf(t - u.swarm_delay, 0.0, a.length)
+		u.anim.seek(t, true)
+		# A dying flyer drops from its height to the floor (falling: height x (1 - f^2)).
+		var f := t / a.length if clip in HOLD_LAST and a.length > 0.0 else 0.0
+		u.position.y = u.swarm_height * (1.0 - f * f)
+
+
 ## -1: auto (GeometryInstance3D visibility ranges, by camera distance). k: pin LOD k.
 func set_lod(k: int) -> void:
 	lod_mode = k
+	for u in swarm_units:
+		u.set_lod(k)
 	for i in lods.size():
 		var mi := lods[i]
 		if k < 0:
@@ -353,8 +461,17 @@ func grip_socket(side: String) -> String:
 	return ""
 
 
-## Parents prop under a BoneAttachment3D on the socket bone. Props are built for a 1.8 m
-## wielder and scaled by scale_m / 1.8 (docs/equipment.md "Prop space").
+## Prop scale: props are built for a 1.8 m wielder. Centauroids and merfolk/naga are measured
+## over the whole body, so monster.json rider_height_m (the humanoid part as a standing
+## wielder; centaur-trooper 1.8) wins over scale_m when set (docs/equipment.md "Prop space").
+func prop_scale() -> float:
+	var h = info.get("rider_height_m")
+	if h == null:
+		h = info.get("scale_m", 1.8)
+	return float(h if h != null else 1.8) / 1.8
+
+
+## Parents prop under a BoneAttachment3D on the socket bone, scaled by prop_scale().
 func attach_prop(prop: Node3D, socket: String) -> bool:
 	if not has_socket(socket):
 		prop.free()
@@ -364,7 +481,7 @@ func attach_prop(prop: Node3D, socket: String) -> bool:
 	ba.name = "socket_" + socket
 	ba.bone_name = socket
 	skeleton.add_child(ba)
-	var s: float = float(info.get("scale_m", 1.8)) / 1.8
+	var s: float = prop_scale()
 	prop.scale = Vector3.ONE * s
 	# manifest prop.grip_offset (rotation deg XYZ, translation m) applies on grip_* sockets
 	# only, as in monster-forge's viewer: bows, crossbows, pistols and shields turn +90 deg

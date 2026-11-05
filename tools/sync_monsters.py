@@ -9,7 +9,9 @@
 Copies only what the game loads: model_rigged.glb (LOD0, textures embedded),
 model_rigged_lod<k>.glb (geometry only, they use LOD0's material) and anims/<clip>.glb, and
 writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lods, plus
-wields / shield from data/registry/<source>.json). Props (out/props/<id>/, already in prop
+wields / shield from data/registry/<source>.json, rider_height_m from the manifest or
+data/overrides/<source>/<id>.json, swarm_unit from the manifest when the swarm was made as
+one unit). Props (out/props/<id>/, already in prop
 space) go to assets/props/<id>/: model.glb, model_lod<k>.glb, lods.json, manifest.json.
 Never model_hi.glb, model_raw.glb, PNGs or paint/. Idempotent: files are compared by content, unchanged files are
 left alone, files the source no longer has are removed. Monsters without a rig are skipped,
@@ -77,7 +79,17 @@ def registry(forge: Path, source: str) -> dict:
     return {m["id"]: m for m in recs if isinstance(m, dict) and "id" in m}
 
 
-def monster_json(src: Path, files: dict[str, Path], rec: dict) -> dict:
+def override(forge: Path, source: str, mid: str) -> dict:
+    """data/overrides/<source>/<id>.json (empty if missing or unreadable)."""
+    p = forge / "data" / "overrides" / source / f"{mid}.json"
+    try:
+        o = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    return o if isinstance(o, dict) else {}
+
+
+def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None = None) -> dict:
     man = json.loads((src / "manifest.json").read_text())
     rig = man.get("rig") or {}
     lods = {"0": {"file": "model_rigged.glb", "tris": glb_tris(files["model_rigged.glb"])}}
@@ -88,7 +100,8 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict) -> dict:
     # The rig stage renames each socket bone to the socket name in the GLB; the manifest
     # maps socket -> the bone it was derived from (kept for reference).
     sockets = {s: {"bone": s, "from": b} for s, b in sorted(rig.get("sockets", {}).items())}
-    return {
+    ov = ov or {}
+    out = {
         "id": man["id"],
         "name": man.get("name", man["id"]),
         "source": man.get("source"),
@@ -101,6 +114,16 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict) -> dict:
         "wields": rec.get("wields", []),
         "shield": bool(rec.get("shield", False)),
     }
+    # Props are sized for a 1.8 m wielder: centauroids / merfolk-naga carry the rider's height
+    # (override rider_height_m, docs/equipment.md "Prop space"); the game scales props by it.
+    rh = man.get("rider_height_m", ov.get("rider_height_m", rec.get("rider_height_m")))
+    if rh is not None:
+        out["rider_height_m"] = rh
+    # A swarm made as ONE unit (monster-forge docs/references.md "Swarm units"): the model is a
+    # single unit at swarm_unit.scale_m, the game multiplies it over swarm_unit.swarm.scale_m.
+    if man.get("swarm_unit"):
+        out["swarm_unit"] = man["swarm_unit"]
+    return out
 
 
 def copy_files(files: dict[str, Path], dest: Path) -> list[str]:
@@ -118,7 +141,7 @@ def copy_files(files: dict[str, Path], dest: Path) -> list[str]:
     return changes
 
 
-def sync_one(src: Path, dest: Path, rec: dict) -> list[str]:
+def sync_one(src: Path, dest: Path, rec: dict, ov: dict | None = None) -> list[str]:
     files = wanted_files(src)
     changes = copy_files(files, dest)
     # Remove GLBs the source no longer has (and Godot's .import sidecars for them).
@@ -128,7 +151,7 @@ def sync_one(src: Path, dest: Path, rec: dict) -> list[str]:
             dp.unlink()
             Path(str(dp) + ".import").unlink(missing_ok=True)
             changes.append("removed " + rel)
-    text = json.dumps(monster_json(src, files, rec), indent=1) + "\n"
+    text = json.dumps(monster_json(src, files, rec, ov), indent=1) + "\n"
     mj = dest / "monster.json"
     if not mj.exists() or mj.read_text() != text:
         changes.append(("updated " if mj.exists() else "added   ") + "monster.json")
@@ -208,7 +231,7 @@ def main() -> int:
             failed += 1
             continue
         try:
-            changes = sync_one(src, a.dest / mid, reg.get(mid, {}))
+            changes = sync_one(src, a.dest / mid, reg.get(mid, {}), override(forge, a.source, mid))
         except (OSError, ValueError, KeyError) as e:
             print(f"{mid}: FAILED {e}")
             failed += 1

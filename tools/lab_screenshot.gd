@@ -2,7 +2,9 @@
 ## headless servers: xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan ...
 ##   godot -s res://tools/lab_screenshot.gd -- <out_dir> [ids=wolf,harpy] [clips=walk|move|all|idle,hit]
 ##         [ts=0.5|0.3,0.5,0.7] [views=three,front,side,top,hand_r,hand_l,grip_r,grip_l,lods] [skel=1]
-##         [gripoffset=0] [tag=_suffix] [prop_r=longsword] [prop_l=longbow|none] [bowstring=0]
+##         [gripoffset=0] [tag=_suffix] [prop_r=longsword] [prop_l=longbow|none] [bowstring=0] [swarm=12|1]
+## swarm=<n>: units drawn for a swarm made as one unit (monster.json swarm_unit, default the
+## lab's 12; 1 = the single unit).
 ## prop_r / prop_l replace the registry loadout (both hands; "none" or a missing side leaves
 ## that hand empty), like the monster-forge viewer's ?prop_r=&prop_l=. bowstring=0 hides bow
 ## strings (Monster.set_bowstrings_visible).
@@ -35,6 +37,8 @@ func _initialize() -> void:
 			if not lab.loadout_override.has(side):
 				lab.loadout_override[side] = ""
 	lab.show_bowstring = opt.get("bowstring", "1") == "1"
+	if opt.has("swarm"):
+		lab.swarm_count = int(opt["swarm"])
 	root.add_child(lab)
 	await process_frame
 	if not lab.has_method("select_monster"):

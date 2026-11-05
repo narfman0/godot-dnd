@@ -28,7 +28,7 @@ Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/
 | `model_rigged.glb` | LOD0: skinned mesh, skeleton, material with embedded textures |
 | `model_rigged_lod<k>.glb` | LOD k: same skeleton and joint order, geometry only, no images |
 | `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem |
-| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`) |
+| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units") |
 
 Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
 `model_lod<k>.glb`, `lods.json` and `manifest.json` (copied whole; the game reads
@@ -501,6 +501,76 @@ Screenshots (`lab_screenshot.gd`, Xvfb, plus the eagle-and-goblin scratch scene 
 - **young-red-dragon idle 0/25/50% (three-quarter, top):** at 0% the curled tail lies in its
   rest curve. At 25% the whole curl has swung sideways (above).
 
+Round 9 (2026-11-05): re-sync after monster-forge f8bb67e..cade6ef (swarm units, the bounded
+idle tail sway, `rider_height_m`). Synced with `--ids` for the 16 monsters already here plus
+swarm-of-bats (new). Updated: swarm-of-bats (added), centaur-trooper (5 clips, monster.json),
+young-red-dragon (one clip), the spear prop. `check_monsters.gd` on the 17: ALL PASS (32
+props), every clip binds 100%; WARNs are the same three fly/swim height changes.
+
+**Swarm units.** monster-forge now makes a swarm as ONE unit (its `docs/references.md` "Swarm
+units"): swarm-of-bats is a single 0.3 m bat (avian plan, `custom.bat_wing`, 47 bones, clips
+idle, fly, attack_melee, hit, death) and its manifest carries `swarm_unit` = {unit, plan,
+rig_template, size, scale_m, swarm: {body_plan, size, scale_m}}. The sync copies it into
+monster.json. The game multiplies the unit:
+- `Monster.swarm_info()` returns `swarm_unit` (or {}). `spawn_swarm(count)` loads count - 1
+  more units of the same id as children of this Monster (the leader, which stays at the
+  origin) and returns them; `swarm_units` lists them, `swarm_aabb()` is the merged bounds.
+- **Layout:** a sunflower spiral over a disc of diameter `swarm.scale_m` (1.5 m for the
+  bats), less a unit radius, jittered by a third of a unit, each unit turned up to ±35° off
+  the leader's -Z. Units of a flying or swimming plan (avian / aquatic, or a fly / swim /
+  hover move clip) also get a height of 0..`swarm.scale_m`/2 above the leader; ground units
+  (rats, beetles, claws) stay on the floor. Seeded by the id, so the layout is the same
+  every time.
+- **Staggered clips:** the units are slaved to the leader. `play()` on the leader starts the
+  same clip on every unit (with its `blend_time`), and each frame the leader's `_process`
+  sets every unit to the leader's time plus its `swarm_phase` (k × 0.618 of the clip, mod 1)
+  on looping clips, or minus its `swarm_delay` (0-0.35 s) on one-shots. A one-shot that has
+  ended on the leader (death holds) puts every unit on its last frame. A flying unit falls
+  from its height to the floor over death (height × (1 - f²), f the clip fraction): the
+  clip itself only lowers a unit to its own y = 0, so without this the dead bats lay on
+  their backs in mid-air. Seeking or pausing
+  the leader (lab Space, `lab_screenshot.gd`) moves the whole swarm, and LOD and speed
+  follow.
+- The lab spawns 12 units for any monster with `swarm_unit` (`SWARM_COUNT`; key `W` or
+  `lab_screenshot.gd swarm=1` for the single unit), frames the swarm's bounds and shows
+  "swarm: 12 x bat (avian, 0.3 m) over 1.5 m" in the status line.
+- `check_monsters.gd` spawns 12 for such monsters: the swarm must fit the footprint plus one
+  unit and every unit must be in its own pose at the same moment. Bats: spans 1.21 x 0.88 x
+  1.46 m, 12 distinct idle poses.
+- A game would rather drive one AnimationPlayer per unit with its own speed and steering
+  (or a MultiMesh with baked vertex animation for large counts); the lab's slaving keeps
+  the swarm on one timeline so it can be paused and screenshotted. swarm-of-rats is still
+  the column pilot (no `swarm_unit`) and loads as one mesh, as before.
+
+Screenshots: the bat swarm in idle, fly and attack_melee reads as a loose cloud of bats between
+knee and shoulder height of the 1.8 m capsule, wings at different points of the beat; the single unit (`swarm=1`) is one bat
+with spread membrane wings. Death at 50% has the bats tumbling at different heights, and at
+100% all 12 lie on their backs on the floor (no squash: the unit's last frame is 0.23 x 0.17
+x 0.19 m, rest height 0.18). At 2.6 m (the swarm's frame) the bats draw LOD2.
+
+**Rider height for props.** The centaur's pike was 4.7 m (scale 1.333 from `scale_m` 2.4).
+monster-forge's override now sets `rider_height_m` 1.8 for centaur-trooper (the manifest does
+not carry it, so the sync reads `data/overrides/srd-5.2.1/<id>.json`), and `attach_prop`
+scales by `prop_scale()`. The check's loadout line: pike scale 1.333 -> 1.000, so 4.67 ->
+3.50 m. In the lab (idle and attack_melee at 50%, side and three-quarter) the pike now runs from the
+horse's rump to about a body length past its chest with a slimmer shaft; before, it was a
+third longer and thicker, its butt behind the rump and its head at the frame edge. monster-forge's viewer does the
+same with `?prop_r=pike#centaur-trooper` (world scale 1.333 -> 1.0, 4.67 -> 3.50 m).
+
+**Dragon mid-idle (round 8's idle-cycle scan, idle sampled at 16 points against each clip's
+frame 0).** monster-forge bounded the idle tail sway by tip travel:
+
+| clip | idle(0) | idle(0.5 s) | over the idle cycle: min / mean / max (round 8 max) |
+|---|---|---|---|
+| attack_melee, breath, hit | 0 | 0.300 | 0 / 0.197 / 0.307 (1.66) |
+| death | 0.042 | 0.298 | 0.042 / 0.214 / 0.317 (1.66) |
+| walk | 0.435 | 0.608 | 0.435 / 0.510 / 0.618 (about 1.7) |
+| fly | 3.341 | 3.111 | 3.100 / 3.345 / 3.590 (by design: it takes off) |
+
+The idle wanders 0.307 m from its first frame (1.66 in round 8). The probe (idle 0.5 s then
+walk) is 0.578 m instant and 0.084 m with the 0.25 s cross-fade (round 8 1.506 / 0.269, round
+6 0.955 / 0.102): the cross-faded switch is now smoother than round 6's.
+
 ### Animations
 
 Clip tracks are rebound by bone name: `track.path = <path to our Skeleton3D>:<bone>`.
@@ -557,9 +627,11 @@ because runtime meshes have no generated LODs.
 **Where props go.** Held props go on `grip_socket("r")` / `grip_socket("l")`: `grip_r` /
 `grip_l` when the rig has them (goblin, harpy, ghost, merfolk, centaur right only), else `hand_r` / `hand_l`.
 `attach_prop(prop, socket)` adds a `BoneAttachment3D` (`bone_name = socket`) under the
-skeleton, parents the prop to it, and scales it by `scale_m / 1.8`. This scaling is meant
-for upright bodies; the loader does not check the body plan, since only handed bodies get
-props.
+skeleton, parents the prop to it, and scales it by `prop_scale()`: `rider_height_m / 1.8`
+when monster.json has `rider_height_m` (round 9; centaur-trooper 1.8, so its 3.5 m pike stays
+3.5 m), else `scale_m / 1.8`. Centauroids and merfolk/naga are measured over the whole body,
+so `scale_m` alone over-scales their props (the centaur's pike was 4.7 m). monster-forge's
+viewer applies the same rule.
 
 **Real props.** `Monster.load_prop(id)` loads `assets/props/<id>/`:
 - **Tree:** `prop_<id>` holds `body`, which holds `model` (the GLTF scene).
@@ -641,7 +713,8 @@ four beasts) carry nothing.
   way the grips were.
 - **Swapping per clip.** For example, sheathe the scimitar for attack_ranged (the lab keeps
   it in hand), and show the shield when no bow is drawn.
-- **Scale by body plan.** `scale_m / 1.8` applies to upright wielders only.
+- **Scale by body plan.** `scale_m / 1.8` applies to upright wielders only; `rider_height_m`
+  covers centauroids (and merfolk/naga once their overrides set it).
 
 **History: before round 2 there were no grip bones, and the hand bone is not a grip
 frame.** A `BoneAttachment3D` on `hand_r` puts the prop at the wrist with +Y running
@@ -674,6 +747,7 @@ Without the sky, metallic surfaces render nearly black. Some pilots export metal
 | `F` | frame the monster |
 | `S` | show / hide bow strings |
 | `G` | toggle `grip_offset` on grip sockets (reloads the monster) |
+| `W` | swarm units: 12 / 1 (monsters with `swarm_unit`; `lab_screenshot.gd swarm=1`) |
 
 The status line shows the LOD that auto mode draws, the camera distance and the switch
 distances.
@@ -701,7 +775,9 @@ distances.
   frame-0 jumps are 0, and walk's lowest point is -0.010 m.
 - Round 8, reported upstream: the dragon's new in-phase idle tail sway moves the curled
   tail tip 1.66 m within the idle, so a mid-idle switch to walk pops 1.5 m (0.27 m
-  cross-faded; round 6 0.96 / 0.10). The eagle's lunge is a small peck. Round 6's eagle
+  cross-faded; round 6 0.96 / 0.10). Round 9 re-checked: the idle wanders 0.31 m, the worst
+  mid-idle jump into a one-shot is 0.31-0.32 m and into walk 0.62 m, and the probe is
+  0.58 / 0.084 m. The eagle's lunge is a small peck. Round 6's eagle
   (neck gap, 1.75 m idle -> fly pop, 5.3 m size) and the merfolk throw are fixed.
 - LOD files name their material `Material_0.001` rather than LOD0's `Material_0`
   (`docs/lods.md` says same name). Harmless here, because the material is overridden.

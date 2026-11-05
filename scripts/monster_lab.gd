@@ -4,12 +4,14 @@
 ##
 ## Mouse: drag to orbit, wheel to zoom. Keys: J/K (or PgDn/PgUp) monster, N/Shift+N clip,
 ## 0 rest pose, Space pause, L cycle LOD (auto, 0-3), A auto LOD, B skeleton, P props,
-## S bow strings, F frame, arrows orbit, +/- zoom.
+## S bow strings, G grip_offset, W swarm units on/off, F frame, arrows orbit, +/- zoom.
 extends Node3D
 
 const Monster = preload("res://scripts/monster.gd")
 ## Props per monster; any other monster with a hand_r socket gets the sword.
 const FOV := 50.0
+## Units shown for a swarm made as one unit (monster.json swarm_unit; Monster.spawn_swarm).
+const SWARM_COUNT := 12
 
 var monster: Node3D
 var ids := PackedStringArray()
@@ -24,6 +26,9 @@ var show_bowstring := true
 ## empty, like the monster-forge viewer's ?prop_r=longsword&prop_l=longbow. "" leaves that
 ## hand empty. lab_screenshot.gd prop_r= / prop_l= set it.
 var loadout_override := {}
+## Units drawn for a swarm made as one unit; 1 = the single unit as synced. Key W toggles
+## SWARM_COUNT / 1, lab_screenshot.gd swarm=<n> sets it.
+var swarm_count := SWARM_COUNT
 
 var _camera: Camera3D
 var _figure: Node3D
@@ -185,7 +190,7 @@ func _build_ui() -> void:
 	_status.add_theme_font_size_override("font_size", 12)
 	box.add_child(_status)
 	var help := Label.new()
-	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · S bow string · G grip_offset · F frame"
+	help.text = "drag orbit · wheel zoom · J/K monster · N clip · 0 rest · space pause\nL LOD · A auto · B skeleton · P props · S bow string · G grip_offset · W swarm · F frame"
 	help.add_theme_font_size_override("font_size", 11)
 	box.add_child(help)
 
@@ -219,7 +224,9 @@ func select_monster(id: String) -> void:
 			prop = Monster.make_bow() if cat in ["bow", "crossbow"] else Monster.make_sword()
 		m.attach_prop(prop, socket)
 	m.set_props_visible(show_props)
-	_figure.position = Vector3(m.aabb.position.x - 0.6, 0, 0)
+	if not m.swarm_info().is_empty():   # one bat in the files, a swarm on screen
+		m.spawn_swarm(swarm_count, FOV)
+	_figure.position = Vector3(m.swarm_aabb().position.x - 0.6, 0, 0)
 	_ui_clip.clear()
 	_ui_clip.add_item("rest")
 	for c in m.clips():
@@ -292,8 +299,9 @@ func set_props_visible(on: bool) -> void:
 func frame() -> void:
 	if not monster:
 		return
-	cam_target = monster.aabb.get_center()
-	cam_dist = monster.radius / sin(deg_to_rad(FOV) * 0.5) * 1.05
+	var b: AABB = monster.swarm_aabb()
+	cam_target = b.get_center()
+	cam_dist = b.size.length() * 0.5 / sin(deg_to_rad(FOV) * 0.5) * 1.05
 
 
 func _process(_delta: float) -> void:
@@ -307,8 +315,11 @@ func _process(_delta: float) -> void:
 		var drawn: int = monster.auto_lod_at(_camera.global_position) if monster.lod_mode < 0 else monster.lod_mode
 		var clip: String = monster.anim.current_animation if monster.anim.is_playing() else (
 				"rest" if monster.current_clip == "" else monster.current_clip + " (last frame)")
-		_status.text = "%s  %s  scale_m %s\nbones %d  clip %s %s\nLOD%d drawn (%s)  %d tris\ncamera %.1f m  switch at %s m" % [
-			monster.info["name"], monster.info.get("body_plan", ""), monster.info.get("scale_m"),
+		var su: Dictionary = monster.swarm_info()
+		var swarm_line := "" if su.is_empty() else "\nswarm: %d x %s (%s, %s m) over %s m" % [
+			monster.swarm_units.size() + 1, su.get("unit"), su.get("plan"), su.get("scale_m"), su.get("swarm", {}).get("scale_m")]
+		_status.text = "%s  %s  scale_m %s%s\nbones %d  clip %s %s\nLOD%d drawn (%s)  %d tris\ncamera %.1f m  switch at %s m" % [
+			monster.info["name"], monster.info.get("body_plan", ""), monster.info.get("scale_m"), swarm_line,
 			monster.skeleton.get_bone_count(), clip, "" if not monster.anim.is_playing() or monster.anim.speed_scale > 0 else "(paused)",
 			drawn, "auto" if monster.lod_mode < 0 else "pinned", monster.lods[drawn].mesh.surface_get_array_index_len(0) / 3,
 			_camera.global_position.distance_to(monster.aabb.get_center()),
@@ -385,6 +396,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_S:
 				show_bowstring = not show_bowstring
 				monster.set_bowstrings_visible(show_bowstring)
+			KEY_W:
+				swarm_count = 1 if swarm_count > 1 else SWARM_COUNT
+				select_monster(monster.id)
 			KEY_G:
 				Monster.apply_grip_offset = not Monster.apply_grip_offset
 				select_monster(monster.id)

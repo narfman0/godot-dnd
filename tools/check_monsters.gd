@@ -32,6 +32,9 @@ func _initialize() -> void:
 		await process_frame
 		rows.append(await _row(m, details))
 		details.append(await _loadout(m))
+		var sw: String = await _swarm(m)
+		if sw != "":
+			details.append(sw)
 		m.queue_free()
 		await process_frame
 	print("\n".join(rows))
@@ -479,6 +482,50 @@ func _props() -> void:
 			p.get_meta("grip_offset").get("rotation_deg_xyz", "-"), ("%s" % (oh as Node3D).position) if oh else "-", str_txt])
 		p.free()
 	print("\n".join(rows))
+
+
+## Swarms made as one unit (monster.json swarm_unit): spawn_swarm(12) as the lab does, then
+## the units must fit the swarm's footprint (disc of diameter swarm.scale_m, plus one unit)
+## and show different poses at the same moment (staggered phases).
+func _swarm(m: Node3D) -> String:
+	var su: Dictionary = m.swarm_info()
+	if su.is_empty():
+		return ""
+	var units: Array = m.spawn_swarm(12)
+	_check(units.size() == 11, "%s: spawn_swarm(12) made %d extra units" % [m.id, units.size()])
+	var foot: float = float(su.get("swarm", {}).get("scale_m", 1.5))
+	var b: AABB = m.swarm_aabb()
+	_check(maxf(b.size.x, b.size.z) <= foot + float(su.get("scale_m", 0.3)) + 0.01, "%s: swarm spans %.2f x %.2f m, footprint %.2f m" % [m.id, b.size.x, b.size.z, foot])
+	var clip: String = "idle" if "idle" in m.clips() else m.move_clip()
+	m.play(clip)
+	m.anim.seek(0.3, true)
+	await process_frame
+	await process_frame
+	var poses := []
+	for n in [m] + units:
+		var s2: Skeleton3D = n.skeleton
+		var q := PackedFloat32Array()
+		for bi in s2.get_bone_count():
+			var r := s2.get_bone_pose_rotation(bi)
+			q.append_array([r.x, r.y, r.z, r.w])
+		poses.append(q)
+	var distinct := 0
+	for i in poses.size():
+		var same := false
+		for j in i:
+			var d := 0.0
+			for k in poses[i].size():
+				d = maxf(d, absf(poses[i][k] - poses[j][k]))
+			if d < 1e-4:
+				same = true
+		if not same:
+			distinct += 1
+	_check(distinct >= poses.size() - 1, "%s: only %d of %d swarm units in distinct poses" % [m.id, distinct, poses.size()])
+	var out := "  swarm: %d x %s (%s, %s m) over %.2f m: spans %.2f x %.2f x %.2f m, %d distinct %s poses at the same moment" % [
+		units.size() + 1, su.get("unit"), su.get("plan"), su.get("scale_m"), foot, b.size.x, b.size.y, b.size.z, distinct, clip]
+	m.spawn_swarm(1)
+	m.play("rest")
+	return out
 
 
 ## The lab's loadout, attached as the lab does it, sampled mid-clip: where the prop's tip
