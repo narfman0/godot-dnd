@@ -9,7 +9,8 @@
 Copies only what the game loads: model_rigged.glb (LOD0, textures embedded),
 model_rigged_lod<k>.glb (geometry only, they use LOD0's material) and anims/<clip>.glb (for UAL
 bipeds only their own clips: the rest come from the shared UAL library, out/<source>/_shared/ual/,
-copied once to assets/monsters/_shared/ual/; manifest anim.ual_shared), and
+copied once to assets/monsters/_shared/ual/; manifest anim.ual_shared; the paired animations,
+out/<source>/_shared/paired/, come along the same way to assets/monsters/_shared/paired/), and
 writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lods, plus
 wields / shield from data/registry/<source>.json, rider_height_m from the manifest or
 data/overrides/<source>/<id>.json, swarm_unit from the manifest when the swarm was made as
@@ -142,6 +143,9 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
     return out
 
 
+PAIRED_REL = "_shared/paired"
+
+
 def sync_library(out: Path, rel: str, dest: Path) -> list[str]:
     """The shared UAL clip library out/<source>/<rel>/ (library.json + one GLB per clip) to
     <dest>/<rel>/, once for every monster that uses it; GLBs it no longer lists are removed."""
@@ -150,6 +154,8 @@ def sync_library(out: Path, rel: str, dest: Path) -> list[str]:
     files = {"library.json": src / "library.json"}
     for e in lib.get("clips", {}).values():
         files[e["file"]] = src / e["file"]
+    for side in lib.get("paired", {}).values():   # paired animations: one sidecar per entry
+        files[side] = src / side
     changes = copy_files(files, dest / rel)
     for dp in sorted((dest / rel).glob("*.glb")):
         if dp.name not in files:
@@ -282,6 +288,10 @@ def main() -> int:
             print("  " + c)
         if has_shared(src):
             libraries.add(ual_shared(json.loads((src / "manifest.json").read_text()))["library"])
+    # paired animations (monster-forge tools/paired.py): same clip format as the UAL library, for every
+    # UAL biped; synced whenever any UAL biped is
+    if libraries and (out / PAIRED_REL / "library.json").exists():
+        libraries.add(PAIRED_REL)
     for rel in sorted(libraries):
         try:
             changes = sync_library(out, rel, a.dest)

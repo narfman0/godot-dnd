@@ -29,6 +29,7 @@ Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/
 | `model_rigged_lod<k>.glb` | LOD k: same skeleton and joint order, geometry only, no images |
 | `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem; UAL bipeds: only their own clips (see "Shared UAL clips") |
 | `../_shared/ual/` | once for all UAL bipeds: `library.json` + one GLB per shared UAL clip (from `out/<source>/_shared/ual/`) |
+| `../_shared/paired/` | once for all UAL bipeds: paired animations, `library.json` + `<entry>.json` sidecars + one GLB per actor clip (from `out/<source>/_shared/paired/`; see "Paired animations") |
 | `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units") |
 
 Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
@@ -788,6 +789,47 @@ a cross-fade from a shared clip into an own clip that turns the root bone (fly, 
 rides the root instead of the pelvis, 0.06 m on the 7.9 m storm giant and 0.005 m on the oni; it is
 gone when the fade ends (the check allows 1% of scale_m mid-fade). `check_monsters.gd` on the same ids: ALL PASS, and its WARN list is the same as with the
 per-monster clips.
+
+### Paired animations
+
+Two UAL bipeds playing one clip pair together (`scripts/paired_anim.gd`; data format and authoring:
+monster-forge docs/anim-reuse.md "Paired animations"). Pilot entry: `grapple`. A sidecar
+(`_shared/paired/<entry>.json`) lists variants by size ratio (receiver / initiator `hip_scale`:
+`grapple` 0.75-1.34, `grapple_big` 0.42-0.75), each with one clip per role (the shared UAL clip
+format, so each monster plays its clip with its own `hip_scale` and pelvis offset), an alignment
+(the receiver's root relative to the initiator's) and contacts (a point on one actor held on a point
+of the other: the initiator's palms on the receiver's shoulders, the receiver's palms on the
+initiator's forearms).
+
+```gdscript
+const PairedAnim = preload("res://scripts/paired_anim.gd")
+var pair := PairedAnim.new()
+add_child(pair)
+if pair.start("grapple", ogre, bandit):   # initiator, receiver; false + pair.last_error otherwise
+    await pair.finished                    # both back in idle (the variant's exit states)
+```
+
+`start()` picks the variant, loads `_shared/paired/` into each player as library `"paired"`
+(`Monster._ual_library()`), fits the alignment (offset scaled so each contact's arm needs the reach
+it had when authored on the sync frame, never closer than the two torso fronts), slides the receiver
+onto `pair.aligned` over `warp_frames` (4: walk it there first), starts both clips on the same frame
+and advances both `AnimationPlayer`s itself (manual callback mode: lockstep). Every frame it bends
+the initiator's spine forward when the targets are further than authored (lean) and solves a
+two-bone IK per contact on world-space bone transforms, in contact order, so the receiver's hands
+hold the initiator's already-solved forearms; a `PairedPose` `SkeletonModifier3D` per skeleton
+writes the rotations. Not `TwoBoneIK3D`: it runs in each skeleton's own deferred update
+(`Skeleton3D.advance()` only queues it), so one skeleton cannot follow another's IK'd pose in the
+same frame, and it has no lean; this solve is the one monster-forge checks offline, and the two
+agree. At the last frame each actor cross-fades into its exit clip. `last_contacts` / `last_lean`
+give the solved distances per frame.
+
+`godot --headless -s res://tools/check_paired.gd -- [entry=grapple] [initiator:receiver ...]` steps
+each pair frame by frame and measures the contacts on the pose as rendered (after the modifiers),
+plus finite bones, feet on the floor and the hand-over to idle. Default pairs, 2026-11-08: tough ->
+bandit (similar size) max 0.4 cm, ogre -> bandit (large grabs medium; offset 0.45 m, lean up to
+21 deg) max 0.9 cm, tolerance 2.8 / 3.7 cm: ALL PASS, the same numbers as monster-forge's
+`tools/paired.py check`. Sync: any UAL biped brings `_shared/paired/` along
+(`tools/sync_monsters.py --ids bandit tough ogre guard`).
 
 ### LODs
 

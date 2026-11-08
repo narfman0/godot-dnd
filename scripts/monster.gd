@@ -503,7 +503,7 @@ func clips() -> PackedStringArray:
 	var out := PackedStringArray()
 	if anim:
 		for n in anim.get_animation_list():
-			if n != "RESET" and not n.begins_with("_") and not n.begins_with("ual/"):
+			if n != "RESET" and not n.begins_with("_") and not n.begins_with("ual/") and not n.begins_with("paired/"):
 				out.append(n)
 	return out
 
