@@ -14,7 +14,7 @@ out/<source>/_shared/paired/, come along the same way to assets/monsters/_shared
 writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lods, plus
 wields / shield from data/registry/<source>.json, rider_height_m from the manifest or
 data/overrides/<source>/<id>.json, swarm_unit from the manifest when the swarm was made as
-one unit). Props (out/props/<id>/, already in prop
+one unit, tags from data/tags.computed.json: monster-forge docs/tags.md). Props (out/props/<id>/, already in prop
 space) go to assets/props/<id>/: model.glb, model_lod<k>.glb, lods.json, manifest.json.
 Never model_hi.glb, model_raw.glb, PNGs or paint/. Idempotent: files are compared by content, unchanged files are
 left alone, files the source no longer has are removed. Monsters without a rig are skipped,
@@ -82,6 +82,16 @@ def registry(forge: Path, source: str) -> dict:
     return {m["id"]: m for m in recs if isinstance(m, dict) and "id" in m}
 
 
+def content_tags(forge: Path, source: str) -> dict:
+    """id -> content tags from monster-forge's data/tags.computed.json (tools/tags.py; docs/tags.md),
+    empty when that file is missing or for another source (the registry's own tags are used then)."""
+    try:
+        d = json.loads((forge / "data" / "tags.computed.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return d.get("monsters") or {} if d.get("source") == source else {}
+
+
 def override(forge: Path, source: str, mid: str) -> dict:
     """data/overrides/<source>/<id>.json (empty if missing or unreadable)."""
     p = forge / "data" / "overrides" / source / f"{mid}.json"
@@ -103,7 +113,8 @@ def ual_shared(man: dict) -> dict:
     return {k: sh[k] for k in UAL_SHARED_KEYS if k in sh} if sh.get("clips") else {}
 
 
-def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None = None) -> dict:
+def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None = None,
+                 tags: list | None = None) -> dict:
     man = json.loads((src / "manifest.json").read_text())
     rig = man.get("rig") or {}
     shared = ual_shared(man)
@@ -128,6 +139,8 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
         "joints": rig.get("joints"),
         "wields": rec.get("wields", []),
         "shield": bool(rec.get("shield", False)),
+        # content tags (srd, type-beast, dinosaur, flying, large, cr-low ...): scripts/monster.gd ids_with_tags()
+        "tags": list(tags if tags is not None else rec.get("tags", [])),
     }
     # Props are sized for a 1.8 m wielder: centauroids / merfolk-naga carry the rider's height
     # (override rider_height_m, docs/equipment.md "Prop space"); the game scales props by it.
@@ -187,7 +200,7 @@ def has_shared(src: Path) -> bool:
         return False
 
 
-def sync_one(src: Path, dest: Path, rec: dict, ov: dict | None = None) -> list[str]:
+def sync_one(src: Path, dest: Path, rec: dict, ov: dict | None = None, tags: list | None = None) -> list[str]:
     files = wanted_files(src)
     changes = copy_files(files, dest)
     # Remove GLBs the source no longer has (and Godot's .import sidecars for them).
@@ -197,7 +210,7 @@ def sync_one(src: Path, dest: Path, rec: dict, ov: dict | None = None) -> list[s
             dp.unlink()
             Path(str(dp) + ".import").unlink(missing_ok=True)
             changes.append("removed " + rel)
-    text = json.dumps(monster_json(src, files, rec, ov), indent=1) + "\n"
+    text = json.dumps(monster_json(src, files, rec, ov, tags), indent=1) + "\n"
     mj = dest / "monster.json"
     if not mj.exists() or mj.read_text() != text:
         changes.append(("updated " if mj.exists() else "added   ") + "monster.json")
@@ -254,6 +267,7 @@ def main() -> int:
 
     out = forge / "out" / a.source
     reg = registry(forge, a.source)
+    tags = content_tags(forge, a.source)
     if not out.is_dir():
         print(f"no such directory: {out}", file=sys.stderr)
         return 2
@@ -278,7 +292,7 @@ def main() -> int:
             failed += 1
             continue
         try:
-            changes = sync_one(src, a.dest / mid, reg.get(mid, {}), override(forge, a.source, mid))
+            changes = sync_one(src, a.dest / mid, reg.get(mid, {}), override(forge, a.source, mid), tags.get(mid))
         except (OSError, ValueError, KeyError) as e:
             print(f"{mid}: FAILED {e}")
             failed += 1

@@ -30,7 +30,7 @@ Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/
 | `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem; UAL bipeds: only their own clips (see "Shared UAL clips") |
 | `../_shared/ual/` | once for all UAL bipeds: `library.json` + one GLB per shared UAL clip (from `out/<source>/_shared/ual/`) |
 | `../_shared/paired/` | once for all UAL bipeds: paired animations, `library.json` + `<entry>.json` sidecars + one GLB per actor clip (from `out/<source>/_shared/paired/`; see "Paired animations") |
-| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units") |
+| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units"); `tags`, the content tags from monster-forge's `data/tags.computed.json` (see "Tags") |
 
 Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
 `model_lod<k>.glb`, `lods.json` and `manifest.json` (copied whole; the game reads
@@ -46,6 +46,15 @@ added, updated or removed file. GLBs that are no longer upstream are removed (wi
 `.import`). Monsters without `model_rigged.glb` are skipped. With `--all`, a synced
 monster that has no rig upstream right now (being regenerated) is kept and reported.
 `model_hi.glb`, `model_raw.glb`, PNGs and `paint/` are never copied.
+
+### Tags
+
+`monster.json` `tags` lists the monster's content tags (monster-forge `docs/tags.md`, `tools/tags.py`):
+source (`srd`), creature type (`type-beast`), family (`dinosaur`, `dragon`, `canine` ...), role, trait,
+movement (`flying`, `aquatic` ...), size, CR band (`cr-low` ...) and body plan. Pipeline tags (`rig-ual`,
+`paired` ...) are not copied: `ual_shared` already says it. `Monster.ids_with_tags(["dinosaur"])` returns
+the synced ids that carry every tag given (a random dinosaur: pick one of them). Re-sync after
+monster-forge recomputes its tags.
 
 ## Loading: runtime `GLTFDocument`, not the import pipeline
 

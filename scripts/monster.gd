@@ -104,6 +104,24 @@ static func list_ids() -> PackedStringArray:
 	return ids
 
 
+## Synced monsters carrying every tag in `tags` (monster.json "tags", monster-forge docs/tags.md),
+## e.g. a random dinosaur: `var ids := Monster.ids_with_tags(["dinosaur"])`, then
+## `Monster.load_monster(ids[randi() % ids.size()])` when not empty.
+static func ids_with_tags(tags: PackedStringArray) -> PackedStringArray:
+	var out := PackedStringArray()
+	for id in list_ids():
+		var info = JSON.parse_string(FileAccess.get_file_as_string("%s/%s/monster.json" % [ROOT, id]))
+		var have: Array = info.get("tags", []) if info is Dictionary else []
+		var ok := true
+		for t in tags:
+			if not have.has(t):
+				ok = false
+				break
+		if ok:
+			out.append(id)
+	return out
+
+
 static func _gltf_scene(path: String) -> Node3D:
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
