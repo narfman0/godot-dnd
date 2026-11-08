@@ -7,7 +7,9 @@
     python3 -I tools/sync_monsters.py --all --forge ~/workspace/monster-forge --source srd-5.2.1
 
 Copies only what the game loads: model_rigged.glb (LOD0, textures embedded),
-model_rigged_lod<k>.glb (geometry only, they use LOD0's material) and anims/<clip>.glb, and
+model_rigged_lod<k>.glb (geometry only, they use LOD0's material) and anims/<clip>.glb (for UAL
+bipeds only their own clips: the rest come from the shared UAL library, out/<source>/_shared/ual/,
+copied once to assets/monsters/_shared/ual/; manifest anim.ual_shared), and
 writes a trimmed monster.json (id, name, scale_m, body_plan, sockets, clips, lods, plus
 wields / shield from data/registry/<source>.json, rider_height_m from the manifest or
 data/overrides/<source>/<id>.json, swarm_unit from the manifest when the swarm was made as
@@ -89,9 +91,21 @@ def override(forge: Path, source: str, mid: str) -> dict:
     return o if isinstance(o, dict) else {}
 
 
+# monster.json ual_shared: what scripts/monster.gd needs to play the shared UAL clips (monster-forge
+# tools/ual_library.py; "own" and "check" stay upstream)
+UAL_SHARED_KEYS = ("library", "version", "hip_scale", "pelvis_offset", "root_bone", "pelvis_bone", "lift_axis", "fps",
+                   "clips", "lift")
+
+
+def ual_shared(man: dict) -> dict:
+    sh = (man.get("anim") or {}).get("ual_shared") or {}
+    return {k: sh[k] for k in UAL_SHARED_KEYS if k in sh} if sh.get("clips") else {}
+
+
 def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None = None) -> dict:
     man = json.loads((src / "manifest.json").read_text())
     rig = man.get("rig") or {}
+    shared = ual_shared(man)
     lods = {"0": {"file": "model_rigged.glb", "tris": glb_tris(files["model_rigged.glb"])}}
     for name in files:
         if name.startswith("model_rigged_lod"):
@@ -108,7 +122,7 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
         "scale_m": man.get("scale_m"),
         "body_plan": man.get("body_plan"),
         "sockets": sockets,
-        "clips": sorted(Path(n).stem for n in files if n.startswith("anims/")),
+        "clips": sorted({Path(n).stem for n in files if n.startswith("anims/")} | set(shared.get("clips", {}))),
         "lods": dict(sorted(lods.items(), key=lambda kv: int(kv[0]))),
         "joints": rig.get("joints"),
         "wields": rec.get("wields", []),
@@ -123,7 +137,26 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
     # single unit at swarm_unit.scale_m, the game multiplies it over swarm_unit.swarm.scale_m.
     if man.get("swarm_unit"):
         out["swarm_unit"] = man["swarm_unit"]
+    if shared:
+        out["ual_shared"] = shared
     return out
+
+
+def sync_library(out: Path, rel: str, dest: Path) -> list[str]:
+    """The shared UAL clip library out/<source>/<rel>/ (library.json + one GLB per clip) to
+    <dest>/<rel>/, once for every monster that uses it; GLBs it no longer lists are removed."""
+    src = out / rel
+    lib = json.loads((src / "library.json").read_text())
+    files = {"library.json": src / "library.json"}
+    for e in lib.get("clips", {}).values():
+        files[e["file"]] = src / e["file"]
+    changes = copy_files(files, dest / rel)
+    for dp in sorted((dest / rel).glob("*.glb")):
+        if dp.name not in files:
+            dp.unlink()
+            Path(str(dp) + ".import").unlink(missing_ok=True)
+            changes.append("removed " + dp.name)
+    return changes
 
 
 def copy_files(files: dict[str, Path], dest: Path) -> list[str]:
@@ -139,6 +172,13 @@ def copy_files(files: dict[str, Path], dest: Path) -> list[str]:
         changes.append(("updated " if dp.exists() else "added   ") + rel)
         tmp.replace(dp)
     return changes
+
+
+def has_shared(src: Path) -> bool:
+    try:
+        return bool(ual_shared(json.loads((src / "manifest.json").read_text())))
+    except (OSError, ValueError):
+        return False
 
 
 def sync_one(src: Path, dest: Path, rec: dict, ov: dict | None = None) -> list[str]:
@@ -214,7 +254,7 @@ def main() -> int:
     # --all: every rigged monster that also has clips (a rig without anims/ is still being
     # made, e.g. centaur-trooper in round 4; --ids syncs it anyway).
     ids = a.ids or sorted(p.name for p in out.iterdir()
-                          if (p / "model_rigged.glb").exists() and any((p / "anims").glob("*.glb")))
+                          if (p / "model_rigged.glb").exists() and (any((p / "anims").glob("*.glb")) or has_shared(p)))
     if a.all:
         for p in sorted(out.iterdir()):
             if (p / "model_rigged.glb").exists() and p.name not in ids:
@@ -224,6 +264,7 @@ def main() -> int:
             if (p / "monster.json").exists() and p.name not in ids:
                 print(f"{p.name}: kept (no model_rigged.glb upstream right now; delete the folder to drop it)")
     failed = 0
+    libraries = set()
     for mid in ids:
         src = out / mid
         if not (src / "model_rigged.glb").exists() or not (src / "manifest.json").exists():
@@ -237,6 +278,18 @@ def main() -> int:
             failed += 1
             continue
         print(f"{mid}: " + ("unchanged" if not changes else f"{len(changes)} change(s)"))
+        for c in changes:
+            print("  " + c)
+        if has_shared(src):
+            libraries.add(ual_shared(json.loads((src / "manifest.json").read_text()))["library"])
+    for rel in sorted(libraries):
+        try:
+            changes = sync_library(out, rel, a.dest)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"{rel}: FAILED {e}")
+            failed += 1
+            continue
+        print(f"{rel} (shared clips): " + ("unchanged" if not changes else f"{len(changes)} change(s)"))
         for c in changes:
             print("  " + c)
     if a.all:

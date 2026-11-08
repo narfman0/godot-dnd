@@ -11,13 +11,17 @@
 ##       Armature/Skeleton3D
 ##         lod0..lod3        MeshInstance3D, same Skin, LOD0's material
 ##         socket_hand_r     BoneAttachment3D (created by attach_prop)
-##     AnimationPlayer       library "" = every anims/<clip>.glb, tracks retargeted
+##     AnimationPlayer       library "" = every anims/<clip>.glb, tracks retargeted;
+##                           UAL bipeds also "ual" = the shared UAL library (one copy for
+##                           all of them), its clips aliased in "" under the monster's names
+##       ual_lift            SkeletonModifier3D: the monster's floor lift on shared clips
 ##
 ## Contract (docs/monsters.md): metres, origin at the feet, +Y up, the creature faces -Z
 ## (so Node3D.look_at() works with use_model_front = false), creature's right is +X.
 extends Node3D
 
 const ROOT := "res://assets/monsters"
+const UalLift = preload("res://scripts/ual_lift.gd")
 const PROP_ROOT := "res://assets/props"
 ## Clip names that loop. Everything else plays once and stops on its last frame (the GLBs
 ## carry no loop flag; this list decides).
@@ -31,6 +35,13 @@ const MOVE_CLIPS := ["walk", "run", "move", "swim", "fly", "hover"]
 const LOD_COVERAGE := [0.6, 0.3, 0.12]
 
 static var last_error := ""
+## Shared UAL clip libraries (monster.json ual_shared, docs/monsters.md "Shared UAL clips"),
+## loaded once: "<library dir>|<skeleton path>" -> AnimationLibrary.
+static var _ual_libraries := {}
+## Tests only: load the clips a monster takes from the shared library from
+## <ual_legacy_root>/<id>/anims_ual/<clip>.glb instead (monster-forge's per-monster bakes),
+## so tools/check_ual_shared.gd can compare the two.
+static var ual_legacy_root := ""
 ## Apply the prop manifest's grip_offset on grip_* sockets (the viewer does). Off: attach
 ## props as is. A switch so the lab can compare (key G); see docs/monsters.md for why.
 static var apply_grip_offset := true
@@ -71,6 +82,14 @@ var swarm_delay := 0.0
 ## Height above the leader this unit flies / swims at (0 for ground units). Units fall to the
 ## floor over a HOLD_LAST clip (death): the clip only drops the unit to its own y = 0.
 var swarm_height := 0.0
+## monster.json ual_shared ({} for monsters with only their own clips): hip_scale (the
+## skeleton's motion_scale), pelvis_offset (moved into the root bone's rest), lift curves.
+var ual_shared: Dictionary = {}
+var _lift_curves := {}      ## clip -> PackedFloat32Array, metres along the lift axis per frame
+var _lift_fps := 30.0
+var _lift_prev := ""        ## the clip play() faded out, its position then, and the fade time
+var _lift_prev_pos := 0.0
+var _lift_blend := 0.0
 
 
 static func list_ids() -> PackedStringArray:
@@ -147,16 +166,43 @@ func _setup(dir: String, fov_deg: float) -> bool:
 	anim.deterministic = true   # un-keyed bones fall back to RESET (off by default in 4.7)
 	add_child(anim)   # root_node ".." = this node
 	var lib := AnimationLibrary.new()
+	ual_shared = info.get("ual_shared", {}) if ual_legacy_root == "" else {}
+	var shared_clips: Dictionary = ual_shared.get("clips", {})
+	var scale := 1.0
+	if not shared_clips.is_empty():
+		scale = _setup_ual_shared()
+		if scale <= 0.0:
+			return false
 	for clip in info.get("clips", []):
-		_add_clip(lib, dir, clip)
-	lib.add_animation("RESET", _reset_animation())
+		if shared_clips.has(clip):
+			continue
+		if ual_legacy_root != "" and info.get("ual_shared", {}).get("clips", {}).has(clip):
+			_add_clip(lib, "%s/%s" % [ual_legacy_root, id], clip, 1.0, "anims_ual")
+		else:
+			_add_clip(lib, dir, clip, scale)
+	lib.add_animation("RESET", _reset_animation(scale))
 	anim.add_animation_library("", lib)
+	if not shared_clips.is_empty():
+		var shared := _ual_library(ual_shared.get("library", ""))
+		if shared == null:
+			return false
+		anim.add_animation_library("ual", shared)
+		for clip in shared_clips:   # same Animation objects, under the monster's clip names
+			var a: Animation = shared.get_animation(shared_clips[clip]) if shared.has_animation(shared_clips[clip]) else null
+			if a == null:
+				report["clips"][clip] = {"tracks": 0, "bound": 0, "unbound": [], "length": 0.0,
+						"error": "shared clip %s not in the library" % shared_clips[clip], "shared": shared_clips[clip]}
+				continue
+			lib.add_animation(clip, a)
+			report["clips"][clip] = {"tracks": a.get_track_count(), "bound": a.get_track_count(), "unbound": [],
+					"length": a.length, "error": "", "shared": shared_clips[clip]}
 	anim.animation_finished.connect(_on_clip_finished)
 	return true
 
 
 func _on_clip_finished(clip: StringName) -> void:
 	if settle_clip != "" and String(clip) not in HOLD_LAST and anim.has_animation(settle_clip):
+		_lift_switch(blend_time)
 		current_clip = settle_clip
 		anim.play(settle_clip, blend_time)
 
@@ -167,7 +213,7 @@ func _on_clip_finished(clip: StringName) -> void:
 ## without both, switching walk -> idle leaves the bones idle does not key in walk's pose
 ## (measured: 16 of 28 wolf bones stuck, up to 58 deg). The editor's scene importer adds
 ## RESET itself; runtime GLTFDocument loading does not.
-func _reset_animation() -> Animation:
+func _reset_animation(scale := 1.0) -> Animation:
 	var a := Animation.new()
 	a.length = 0.001
 	var sp := String(get_path_to(skeleton))
@@ -176,7 +222,7 @@ func _reset_animation() -> Animation:
 		var path := NodePath("%s:%s" % [sp, skeleton.get_bone_name(b)])
 		var t := a.add_track(Animation.TYPE_POSITION_3D)
 		a.track_set_path(t, path)
-		a.position_track_insert_key(t, 0.0, rest.origin)
+		a.position_track_insert_key(t, 0.0, rest.origin / scale)   # motion_scale multiplies it back
 		t = a.add_track(Animation.TYPE_ROTATION_3D)
 		a.track_set_path(t, path)
 		a.rotation_track_insert_key(t, 0.0, rest.basis.get_rotation_quaternion())
@@ -259,11 +305,13 @@ func _check_same_skeleton(sk: Skeleton3D, skin: Skin, ref_skin: Skin) -> String:
 
 
 ## Loads anims/<clip>.glb (armature only) and rebinds its tracks onto our skeleton by bone
-## name. Tracks whose bone is missing are dropped and counted.
-func _add_clip(lib: AnimationLibrary, dir: String, clip: String) -> void:
+## name. Tracks whose bone is missing are dropped and counted. scale: the skeleton's
+## motion_scale (UAL bipeds with shared clips), divided out of the clip's position keys; the
+## root bone (its rest carries the pelvis offset then) is keyed at its own rest.
+func _add_clip(lib: AnimationLibrary, dir: String, clip: String, scale := 1.0, sub := "anims") -> void:
 	var rep := {"tracks": 0, "bound": 0, "unbound": [], "length": 0.0, "error": ""}
 	report["clips"][clip] = rep
-	var sc := _gltf_scene("%s/anims/%s.glb" % [dir, clip])
+	var sc := _gltf_scene("%s/%s/%s.glb" % [dir, sub, clip])
 	if sc == null:
 		rep["error"] = last_error
 		return
@@ -290,6 +338,8 @@ func _add_clip(lib: AnimationLibrary, dir: String, clip: String) -> void:
 			else:
 				rep["unbound"].append(String(p))
 				a.remove_track(t)
+		if not ual_shared.is_empty():
+			_unscale_positions(a, skel_path, scale)
 		var key: String = clip if names.size() == 1 else "%s:%s" % [clip, n]
 		a.loop_mode = Animation.LOOP_LINEAR if clip in LOOPING else Animation.LOOP_NONE
 		rep["length"] = a.length
@@ -297,11 +347,163 @@ func _add_clip(lib: AnimationLibrary, dir: String, clip: String) -> void:
 	sc.free()
 
 
+## A monster's own clip next to shared ones: the skeleton's motion_scale multiplies every
+## position key, so divide them by it, and key the root and pelvis bones at their original
+## rests when the clip has no track for them (Godot drops channels that stay at the rest; the
+## rests now carry the pelvis offset that shared clips need and this baked clip already has).
+func _unscale_positions(a: Animation, skel_path: String, scale: float) -> void:
+	var need := _orig_rest.duplicate()
+	for t in a.get_track_count():
+		if a.track_get_type(t) != Animation.TYPE_POSITION_3D:
+			continue
+		need.erase(String(a.track_get_path(t).get_concatenated_subnames()))
+		for k in a.track_get_key_count(t):
+			a.track_set_key_value(t, k, (a.track_get_key_value(t, k) as Vector3) / scale)
+	for bone in need:
+		var t := a.add_track(Animation.TYPE_POSITION_3D)
+		a.track_set_path(t, NodePath("%s:%s" % [skel_path, bone]))
+		a.position_track_insert_key(t, 0.0, need[bone] / scale)
+
+
+var _orig_rest := {}   ## root and pelvis rest origins before _setup_ual_shared moved them
+
+
+## Shared UAL clips key the UAL bones' local rotations (the same on every UAL biped) and the
+## pelvis translation u in UAL's units; this monster's pelvis is hip_scale * u + pelvis_offset
+## (+ its floor lift). motion_scale = hip_scale does the first; the offset goes into the root
+## bone's rest (no shared clip keys the root; the pelvis rest moves back, so the rest pose is
+## unchanged); the lift is a SkeletonModifier3D (scripts/ual_lift.gd). Returns hip_scale, or
+## 0 on bad data.
+func _setup_ual_shared() -> float:
+	var s := float(ual_shared.get("hip_scale", 0.0))
+	var off: Array = ual_shared.get("pelvis_offset", [])
+	var rb := skeleton.find_bone(ual_shared.get("root_bone", "root"))
+	var pb := skeleton.find_bone(ual_shared.get("pelvis_bone", "pelvis"))
+	if s <= 0.0 or off.size() != 3 or rb < 0 or pb < 0 or skeleton.get_bone_parent(pb) != rb:
+		last_error = "%s: ual_shared needs hip_scale > 0, a 3-vector pelvis_offset and a pelvis bone under the root bone" % id
+		return 0.0
+	var c := Vector3(off[0], off[1], off[2])
+	var rr := skeleton.get_bone_rest(rb)
+	var pr := skeleton.get_bone_rest(pb)
+	_orig_rest = {skeleton.get_bone_name(rb): rr.origin, skeleton.get_bone_name(pb): pr.origin}
+	skeleton.set_bone_rest(rb, Transform3D(rr.basis, rr.origin + rr.basis * c))
+	skeleton.set_bone_rest(pb, Transform3D(pr.basis, pr.origin - c))
+	skeleton.reset_bone_poses()
+	skeleton.motion_scale = s
+	var lift: Dictionary = ual_shared.get("lift", {})
+	if not lift.is_empty():
+		_lift_fps = float(ual_shared.get("fps", 30.0))
+		for clip in lift:
+			_lift_curves[clip] = PackedFloat32Array(lift[clip])
+		var ax: Array = ual_shared.get("lift_axis", [0.0, 0.0, 1.0])
+		var mod := UalLift.new()
+		mod.name = "ual_lift"
+		mod.monster = self
+		mod.bone = rb
+		mod.axis = (rr.basis * Vector3(ax[0], ax[1], ax[2])).normalized()   # root-local -> skeleton space
+		skeleton.add_child(mod)
+	return s
+
+
+## The shared library at assets/monsters/<rel> (library.json + one GLB per clip), loaded once
+## per skeleton path. Its tracks are rebound to this monster's skeleton path; Godot drops
+## glTF channels that never leave the rest pose, and the library's rest is UAL's, not this
+## monster's, so a dropped rotation channel is put back as a constant track at UAL's rest.
+func _ual_library(rel: String) -> AnimationLibrary:
+	var sp := String(get_path_to(skeleton))
+	var key := "%s|%s" % [rel, sp]
+	if _ual_libraries.has(key):
+		return _ual_libraries[key]
+	var dir := "%s/%s" % [ROOT, rel]
+	var parsed = JSON.parse_string(FileAccess.get_file_as_string(dir + "/library.json"))
+	if not parsed is Dictionary:
+		last_error = "%s/library.json missing or invalid" % dir
+		return null
+	var pelvis: String = parsed.get("pelvis_bone", "pelvis")
+	var root_bone: String = parsed.get("root_bone", "root")
+	var lib := AnimationLibrary.new()
+	for name in parsed.get("clips", {}):
+		var e: Dictionary = parsed["clips"][name]
+		var sc := _gltf_scene("%s/%s" % [dir, e["file"]])
+		if sc == null:
+			push_warning(last_error)
+			continue
+		var players := sc.find_children("*", "AnimationPlayer", true, false)
+		var sks := sc.find_children("*", "Skeleton3D", true, false)
+		if players.is_empty() or sks.size() != 1 or (players[0] as AnimationPlayer).get_animation_list().is_empty():
+			push_warning("%s: no animation or skeleton" % e["file"])
+			sc.free()
+			continue
+		var src_sk: Skeleton3D = sks[0]
+		var ap: AnimationPlayer = players[0]
+		var a: Animation = ap.get_animation(ap.get_animation_list()[0]).duplicate(true)
+		var have := {}
+		for t in range(a.get_track_count() - 1, -1, -1):
+			var p := a.track_get_path(t)
+			var bone := String(p.get_concatenated_subnames())
+			var ty := a.track_get_type(t)
+			# rotations of every bone but the root, the pelvis position; nothing else
+			if bone == "" or bone == root_bone or not (ty == Animation.TYPE_ROTATION_3D or (ty == Animation.TYPE_POSITION_3D and bone == pelvis)):
+				a.remove_track(t)
+				continue
+			a.track_set_path(t, NodePath("%s:%s" % [sp, bone]))
+			have["%s/%d" % [bone, ty]] = true
+		for b in src_sk.get_bone_count():
+			var bn := src_sk.get_bone_name(b)
+			if bn == root_bone:
+				continue
+			if not have.has("%s/%d" % [bn, Animation.TYPE_ROTATION_3D]):
+				var t := a.add_track(Animation.TYPE_ROTATION_3D)
+				a.track_set_path(t, NodePath("%s:%s" % [sp, bn]))
+				a.rotation_track_insert_key(t, 0.0, src_sk.get_bone_rest(b).basis.get_rotation_quaternion())
+			if bn == pelvis and not have.has("%s/%d" % [bn, Animation.TYPE_POSITION_3D]):
+				var t := a.add_track(Animation.TYPE_POSITION_3D)
+				a.track_set_path(t, NodePath("%s:%s" % [sp, bn]))
+				a.position_track_insert_key(t, 0.0, src_sk.get_bone_rest(b).origin)
+		a.loop_mode = Animation.LOOP_LINEAR if e.get("loop", false) else Animation.LOOP_NONE
+		lib.add_animation(name, a)
+		sc.free()
+	_ual_libraries[key] = lib
+	return lib
+
+
+## The floor lift (metres along the lift axis) for the pose shown now: the current clip's
+## curve, cross-faded from the previous clip's over the play() blend. 0 for own clips.
+func ual_lift_now() -> float:
+	if current_clip == "" or _lift_curves.is_empty() or anim.assigned_animation != current_clip:
+		return 0.0
+	var t := anim.current_animation_position
+	var h := _lift_at(current_clip, t)
+	if _lift_blend > 0.0 and t < _lift_blend:
+		h = lerpf(_lift_at(_lift_prev, _lift_prev_pos + t), h, t / _lift_blend)
+	return h
+
+
+func _lift_at(clip: String, t: float) -> float:
+	var c: PackedFloat32Array = _lift_curves.get(clip, PackedFloat32Array())
+	if c.is_empty() or not anim.has_animation(clip):
+		return 0.0
+	var a := anim.get_animation(clip)
+	t = fposmod(t, a.length) if a.loop_mode != Animation.LOOP_NONE else clampf(t, 0.0, a.length)
+	var f := t * _lift_fps
+	var i := clampi(int(f), 0, c.size() - 1)
+	return lerpf(c[i], c[mini(i + 1, c.size() - 1)], f - floorf(f))
+
+
+## Remembers what play() fades out of, for the lift cross-fade.
+func _lift_switch(blend: float) -> void:
+	if _lift_curves.is_empty():
+		return
+	_lift_prev = current_clip
+	_lift_prev_pos = anim.current_animation_position if current_clip != "" and anim.assigned_animation == current_clip else 0.0
+	_lift_blend = blend if _lift_prev != "" else 0.0
+
+
 func clips() -> PackedStringArray:
 	var out := PackedStringArray()
 	if anim:
 		for n in anim.get_animation_list():
-			if n != "RESET" and not n.begins_with("_"):
+			if n != "RESET" and not n.begins_with("_") and not n.begins_with("ual/"):
 				out.append(n)
 	return out
 
@@ -326,6 +528,7 @@ func play(clip: String) -> void:
 		skeleton.reset_bone_poses()
 		current_clip = ""
 		return
+	_lift_switch(blend_time)
 	current_clip = clip
 	anim.play(clip, blend_time)
 

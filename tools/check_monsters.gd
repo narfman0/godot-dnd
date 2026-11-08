@@ -226,10 +226,16 @@ func _skinned(m: Node3D, mi: MeshInstance3D, rest: bool) -> PackedVector3Array:
 		if b < 0:
 			b = sk.find_bone(skin.get_bind_name(i))
 		mats.append(sk.get_bone_global_pose(b) * skin.get_bind_pose(i))
+	# Shared UAL clips: the floor lift is a SkeletonModifier3D on the root bone (an ancestor of
+	# every weighted bone); get_bone_global_pose() here is the pose before modifiers, so add it.
+	var lift := Vector3.ZERO
+	var mod := sk.get_node_or_null("ual_lift")
+	if mod != null:
+		lift = mod.axis * m.ual_lift_now()
 	var out := PackedVector3Array()
 	out.resize(v.size())
 	for i in v.size():
-		var p := Vector3.ZERO
+		var p := lift
 		for j in per:
 			var wt := w[i * per + j]
 			if wt > 0.0:
@@ -663,6 +669,10 @@ func _channels(m: Node3D) -> String:
 	var out := []
 	for c in m.clips():
 		var path := "%s/%s/anims/%s.glb" % [Monster.ROOT, m.id, c]
+		var shared: Dictionary = m.ual_shared.get("clips", {})
+		if shared.has(c):   # a shared UAL clip: the library's GLB (its rest is UAL's, as the tracks')
+			var lib = JSON.parse_string(FileAccess.get_file_as_string("%s/%s/library.json" % [Monster.ROOT, m.ual_shared["library"]]))
+			path = "%s/%s/%s" % [Monster.ROOT, m.ual_shared["library"], lib["clips"][shared[c]]["file"]]
 		var g := _glb(path)
 		if g.is_empty():
 			_check(false, "%s/%s: cannot read %s" % [m.id, c, path])

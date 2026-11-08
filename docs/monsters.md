@@ -27,8 +27,9 @@ Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/
 |---|---|
 | `model_rigged.glb` | LOD0: skinned mesh, skeleton, material with embedded textures |
 | `model_rigged_lod<k>.glb` | LOD k: same skeleton and joint order, geometry only, no images |
-| `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem |
-| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units") |
+| `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem; UAL bipeds: only their own clips (see "Shared UAL clips") |
+| `../_shared/ual/` | once for all UAL bipeds: `library.json` + one GLB per shared UAL clip (from `out/<source>/_shared/ual/`) |
+| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units") |
 
 Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
 `model_lod<k>.glb`, `lods.json` and `manifest.json` (copied whole; the game reads
@@ -80,7 +81,9 @@ same way as `*.json`, so the raw GLBs ship. This has not been tested with an exp
     Armature/Skeleton3D       the only skeleton
       lod0 .. lod3            MeshInstance3D, all with LOD0's Skin and material
       socket_hand_r           BoneAttachment3D + prop (attach_prop)
-  AnimationPlayer             library "": RESET + every anims/<clip>.glb
+      ual_lift                UAL bipeds with lift curves: SkeletonModifier3D (scripts/ual_lift.gd)
+  AnimationPlayer             library "": RESET + every anims/<clip>.glb (+ aliases of shared clips)
+                              library "ual": the shared UAL library (UAL bipeds; one object for all)
 ```
 
 ## The export contract, as verified in Godot 4.7.1
@@ -738,6 +741,53 @@ clip does not key in the old clip's pose. Measured: after walk -> a clip keying 
 `AnimationPlayer.deterministic = true` (false by default in 4.7) plus a `RESET` animation
 that keys every bone's rest pose. The check now leaves 0 bones off rest. The editor
 importer makes RESET itself; runtime loading does not.
+
+### Shared UAL clips
+
+Bipeds rigged straight onto the Quaternius UAL skeleton (monster-forge `rig_source: "ual"`, 65 bones,
+same names everywhere) share their UAL clips: monster-forge `tools/ual_library.py` keeps one GLB per
+UAL clip (`_shared/ual/Idle_Loop.glb`, `Walk_Loop`, `Jog_Fwd_Loop`, `Punch_Cross`, `Sword_Attack`,
+`Hit_Chest`, `Death01`, the spell chain, three `Zombie_*`; 11 files, 0.9 MB) and the monster keeps
+only its own clips (procedural ones: attack_ranged, robe-safe walks, ...) in `anims/`.
+`monster.json` `ual_shared` says which clip is which: `clips` {our name: library clip}, plus
+`hip_scale`, `pelvis_offset`, `lift_axis`, `fps`, `lift` {clip: metres per frame}.
+
+A library clip keys the UAL bones' local rotations (identical on every UAL biped: monster-forge bakes
+them that way) and the pelvis translation `u` in UAL's units; nothing else, so every other bone stays
+at this monster's rest (its proportions). The monster's pelvis must be
+`hip_scale * u + pelvis_offset + lift(t) * lift_axis`. `Monster._setup_ual_shared()` does this
+without copying any clip:
+- `Skeleton3D.motion_scale = hip_scale` (Godot multiplies every position track by it). The
+  monster's own clips and RESET have their position keys divided by it at load.
+- `pelvis_offset` (root-local) moves into the root bone's rest and out of the pelvis rest, so the
+  rest pose is unchanged; no shared clip keys the root. Own clips get root / pelvis position tracks
+  at the original rests when Godot dropped them (constant at rest). The root bone has no skin
+  weights on any UAL biped (checked), so its rest moving shows nothing.
+- `lift` (monster-forge raises a body out of the floor on some clips: deaths, some walks, because
+  its mesh is thicker than UAL's mannequin) is added to the root bone by `scripts/ual_lift.gd`, a
+  `SkeletonModifier3D`, from the current clip's curve, cross-faded from the previous clip's over
+  `blend_time`. Modifier poses exist only between the modifier pass and `skeleton_updated`
+  (`get_bone_global_pose()` in `_process` is the animated pose without them): checks that skin on
+  the CPU add the lift themselves (`check_monsters.gd` `_skinned`).
+
+The library is loaded once (`Monster._ual_libraries`, per library and skeleton path) into an
+`AnimationLibrary` added to each UAL biped's player as `"ual"`; the clips it uses are also added to
+`""` under the monster's names (the same `Animation` objects), so `play("idle")`, `clips()` and the
+lab work unchanged and an own clip of the same name wins. Godot drops glTF channels that stay at
+the file's rest, which is UAL's rest here, so dropped rotation channels are put back as constant
+tracks. Loop mode comes from `library.json` (`loop`).
+
+`godot --headless -s res://tools/check_ual_shared.gd -- [forge=../monster-forge] [id ...]` loads
+each UAL biped twice, as above and with every shared clip read from monster-forge's per-monster
+bake (`out/srd-5.2.1/<id>/anims_ual/<clip>.glb`, `Monster.ual_legacy_root`), and compares every
+bone's global pose (root excluded) as rendered at 0/25/50/75/100% of each clip and 0.1 s into an
+idle -> clip cross-fade. On ape, flesh-golem, skeleton, stone-giant, archmage (own attack_melee,
+attack_ranged), mummy (zombie clips), wolf (no shared clips), and priest, oni, storm-giant (own
+walk / death / fly / swim): 0.0000-0.0001 m on every clip, ALL PASS. One known difference: 0.1 s into
+a cross-fade from a shared clip into an own clip that turns the root bone (fly, swim), the offset
+rides the root instead of the pelvis, 0.06 m on the 7.9 m storm giant and 0.005 m on the oni; it is
+gone when the fade ends (the check allows 1% of scale_m mid-fade). `check_monsters.gd` on the same ids: ALL PASS, and its WARN list is the same as with the
+per-monster clips.
 
 ### LODs
 
