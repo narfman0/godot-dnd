@@ -3,9 +3,10 @@
 ## SkeletonModifier3Ds), that every contact at full weight stays within its tolerance
 ## (sidecar tolerance x mean hip_scale), that nothing explodes (every bone within 2 x scale_m of
 ## its monster, finite) and that the feet stay on the floor.
-##   godot --headless -s res://tools/check_paired.gd -- [entry=grapple] [initiator:receiver ...]
-## Default pairs: tough:bandit (similar size) and ogre:bandit (large grabs medium). Prints ALL PASS /
-## FAIL; exit code 1 on failure.
+##   godot --headless -s res://tools/check_paired.gd -- [entry=grapple] [initiator:receiver[:refuse] ...]
+## Default pairs: tough:bandit (similar size), ogre:bandit (large grabs medium) and tough:hill-giant:refuse
+## (Huge is two sizes up: start() must refuse it, sidecar max_size_up). Prints ALL PASS / FAIL; exit
+## code 1 on failure.
 extends SceneTree
 
 const Monster = preload("res://scripts/monster.gd")
@@ -23,9 +24,12 @@ func _initialize() -> void:
 		elif ":" in a:
 			pairs.append(a.split(":"))
 	if pairs.is_empty():
-		pairs = [["tough", "bandit"], ["ogre", "bandit"]]
+		pairs = [["tough", "bandit"], ["ogre", "bandit"], ["tough", "hill-giant", "refuse"]]
 	for pr in pairs:
-		await _run(entry, pr[0], pr[1])
+		if pr.size() > 2 and pr[2] == "refuse":
+			await _refuse(entry, pr[0], pr[1])
+		else:
+			await _run(entry, pr[0], pr[1])
 	print("ALL PASS" if _fail == 0 else "FAIL (%d)" % _fail)
 	quit(1 if _fail else 0)
 
@@ -115,6 +119,35 @@ func _run(entry: String, i_id: String, r_id: String) -> void:
 	_check(feet < 0.12, "feet off the floor (%.3f x scale_m)" % feet)
 	await process_frame
 	_check(ini.current_clip == "idle" and rec.current_clip == "idle", "exit: %s / %s, not idle" % [ini.current_clip, rec.current_clip])
+	ini.queue_free()
+	rec.queue_free()
+	pair.queue_free()
+	await process_frame
+
+
+## start() must refuse the pair on size (the receiver more than max_size_up categories larger)
+## and leave both monsters untouched.
+func _refuse(entry: String, i_id: String, r_id: String) -> void:
+	var ini: Node3D = Monster.load_monster(i_id)
+	var rec: Node3D = Monster.load_monster(r_id)
+	if ini == null or rec == null:
+		_check(false, "%s / %s: load failed: %s" % [i_id, r_id, Monster.last_error])
+		return
+	root.add_child(ini)
+	root.add_child(rec)
+	ini.play("idle")
+	rec.play("idle")
+	var before := rec.transform
+	await process_frame
+	var pair = PairedAnim.new()
+	root.add_child(pair)
+	pair.set_process(false)
+	var ok := pair.start(entry, ini, rec)
+	print("%s -> %s: %s (%s / %s, %d sizes up)" % [i_id, r_id, "started" if ok else "refused: " + pair.last_error,
+			ini.info.get("size", "?"), rec.info.get("size", "?"), PairedAnim.sizes_up(ini, rec)])
+	_check(not ok, "%s -> %s: started, should be refused on size" % [i_id, r_id])
+	_check(pair.last_error.contains("sizes larger"), "%s -> %s: refused for another reason: %s" % [i_id, r_id, pair.last_error])
+	_check(not pair.running and rec.transform == before, "%s -> %s: refused pair moved the receiver" % [i_id, r_id])
 	ini.queue_free()
 	rec.queue_free()
 	pair.queue_free()

@@ -90,8 +90,22 @@ static func pick_variant(e: Dictionary, s_i: float, s_r: float) -> Dictionary:
 	return best if bd <= 0.05 else {}
 
 
+## D&D size categories, in order (monster.json `size`).
+const SIZES := ["tiny", "small", "medium", "large", "huge", "gargantuan"]
+
+
+## How many size categories larger than the initiator the receiver is (receiver - initiator), or
+## 0 when either monster has no known size.
+static func sizes_up(initiator: Node3D, receiver: Node3D) -> int:
+	var si := SIZES.find(str(initiator.info.get("size", "")).to_lower())
+	var sr := SIZES.find(str(receiver.info.get("size", "")).to_lower())
+	return sr - si if si >= 0 and sr >= 0 else 0
+
+
 ## Starts the pair; both Monster nodes must share a parent space (the receiver is moved). False
-## (see last_error) when the entry is missing, an actor has no shared UAL data, or no variant fits.
+## (see last_error) when the entry is missing, an actor has no shared UAL data, the receiver is more
+## than the entry's max_size_up size categories larger than the initiator (grapple: 1, as 5e allows;
+## the clips were never authored for more), or no variant fits.
 var last_error := ""
 func start(entry_name: String, initiator: Node3D, receiver: Node3D) -> bool:
 	last_error = ""
@@ -106,6 +120,12 @@ func start(entry_name: String, initiator: Node3D, receiver: Node3D) -> bool:
 			last_error = "%s: no ual_shared (not a UAL biped with shared clips)" % m.id
 			return false
 		scale[role] = float(m.ual_shared["hip_scale"])
+	var max_up := int(entry.get("max_size_up", -1))
+	var up := sizes_up(initiator, receiver)
+	if max_up >= 0 and up > max_up:
+		last_error = "%s: %s (%s) is %d sizes larger than %s (%s), at most %d" % [entry_name, receiver.id,
+				receiver.info.get("size", "?"), up, initiator.id, initiator.info.get("size", "?"), max_up]
+		return false
 	variant = pick_variant(entry, scale["initiator"], scale["receiver"])
 	if variant.is_empty():
 		last_error = "%s: no variant for size ratio %.2f" % [entry_name, scale["receiver"] / scale["initiator"]]

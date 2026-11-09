@@ -132,6 +132,9 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
         "name": man.get("name", man["id"]),
         "source": man.get("source"),
         "scale_m": man.get("scale_m"),
+        # D&D size category (tiny .. gargantuan): scripts/paired_anim.gd refuses a pair beyond the
+        # entry's max_size_up (a grapple reaches one size up)
+        "size": man.get("size"),
         "body_plan": man.get("body_plan"),
         "sockets": sockets,
         "clips": sorted({Path(n).stem for n in files if n.startswith("anims/")} | set(shared.get("clips", {}))),

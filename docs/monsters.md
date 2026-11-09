@@ -30,7 +30,7 @@ Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/
 | `anims/<clip>.glb` | one armature-only clip per file, clip name = file stem; UAL bipeds: only their own clips (see "Shared UAL clips") |
 | `../_shared/ual/` | once for all UAL bipeds: `library.json` + one GLB per shared UAL clip (from `out/<source>/_shared/ual/`) |
 | `../_shared/paired/` | once for all UAL bipeds: paired animations, `library.json` + `<entry>.json` sidecars + one GLB per actor clip (from `out/<source>/_shared/paired/`; see "Paired animations") |
-| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units"); `tags`, the content tags from monster-forge's `data/tags.computed.json` (see "Tags") |
+| `monster.json` | trimmed manifest: `id`, `name`, `source`, `scale_m`, `size` (D&D size category, see "Paired animations"), `body_plan`, `sockets` (`{socket: {bone, from}}`), `clips`, `lods` (`{k: {file, tris}}`), `joints`, plus `wields` and `shield` from the registry record (`data/registry/<source>.json`); `ual_shared` from the manifest's `anim.ual_shared` (UAL bipeds); `rider_height_m` when the manifest, the override (`data/overrides/<source>/<id>.json`) or the record sets it (centauroids, merfolk/naga: prop scale, see "Sockets and props"); `swarm_unit` when the manifest has it (a swarm made as one unit, see "Swarm units"); `tags`, the content tags from monster-forge's `data/tags.computed.json` (see "Tags") |
 
 Props come from `out/props/<id>/` and go to `assets/props/<id>/`: `model.glb`,
 `model_lod<k>.glb`, `lods.json` and `manifest.json` (copied whole; the game reads
@@ -853,9 +853,12 @@ bandit (similar size) max 0.4 cm, ogre -> bandit (large grabs medium; offset 0.4
 `tools/paired.py check`. `grapple_up` (2026-11-08): bandit -> ogre (1.82) max 2.8 cm, tough -> ogre
 1.3 cm, guard -> troll and priest -> troll (2.04) 0.6 cm; hill-giant -> ogre (`grapple_big`, ratio
 0.75, lean 55 deg) 1.7 cm. tough -> hill-giant (2.10) fails by ~50 cm: the hill giant is Huge (two
-sizes up), its arms are short and its belly holds the tough 1 m off; callers should refuse grapples
-more than one size up anyway. Sync: any UAL biped brings `_shared/paired/` along
-(`tools/sync_monsters.py --ids bandit tough ogre guard`).
+sizes up), its arms are short and its belly holds the tough 1 m off. So `start()` refuses a receiver
+more than the sidecar's `max_size_up` size categories above the initiator (`grapple` 1, the 5e rule)
+before it looks at the ratio, comparing the two monster.json `size` fields (`PairedAnim.sizes_up()`;
+unknown sizes do not refuse); `last_error` says "<receiver> (huge) is 2 sizes larger than <initiator>
+(medium), at most 1". `check_paired.gd` runs `tough:hill-giant:refuse` by default. Sync: any UAL biped
+brings `_shared/paired/` along (`tools/sync_monsters.py --ids bandit tough ogre guard`).
 
 ### LODs
 
