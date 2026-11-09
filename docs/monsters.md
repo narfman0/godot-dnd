@@ -804,11 +804,12 @@ per-monster clips.
 Two UAL bipeds playing one clip pair together (`scripts/paired_anim.gd`; data format and authoring:
 monster-forge docs/anim-reuse.md "Paired animations"). Pilot entry: `grapple`. A sidecar
 (`_shared/paired/<entry>.json`) lists variants by size ratio (receiver / initiator `hip_scale`:
-`grapple` 0.75-1.34, `grapple_big` 0.42-0.75), each with one clip per role (the shared UAL clip
+`grapple` 0.75-1.18, `grapple_big` 0.42-0.75, `grapple_up` 1.18-2.4), each with one clip per role (the shared UAL clip
 format, so each monster plays its clip with its own `hip_scale` and pelvis offset), an alignment
 (the receiver's root relative to the initiator's) and contacts (a point on one actor held on a point
 of the other: the initiator's palms on the receiver's shoulders, the receiver's palms on the
-initiator's forearms).
+initiator's forearms; in `grapple_up`, for a receiver up to one size larger, the receiver bends and
+presses its palms on the initiator's shoulders and the initiator reaches up and holds its forearms).
 
 ```gdscript
 const PairedAnim = preload("res://scripts/paired_anim.gd")
@@ -823,9 +824,11 @@ if pair.start("grapple", ogre, bandit):   # initiator, receiver; false + pair.la
 it had when authored on the sync frame, never closer than the two torso fronts), slides the receiver
 onto `pair.aligned` over `warp_frames` (4: walk it there first), starts both clips on the same frame
 and advances both `AnimationPlayer`s itself (manual callback mode: lockstep). Every frame it bends
-the initiator's spine forward when the targets are further than authored (lean) and solves a
+the spine of a role with lean contacts forward when the targets are further than authored (lean;
+the initiator in `grapple`, the receiver in `grapple_up`) and solves a
 two-bone IK per contact on world-space bone transforms, in contact order, so the receiver's hands
-hold the initiator's already-solved forearms; a `PairedPose` `SkeletonModifier3D` per skeleton
+hold the initiator's already-solved forearms (`grapple_up` lists the receiver's contacts first, so
+there the initiator's hands follow the receiver's solved forearms); a `PairedPose` `SkeletonModifier3D` per skeleton
 writes the rotations. Not `TwoBoneIK3D`: it runs in each skeleton's own deferred update
 (`Skeleton3D.advance()` only queues it), so one skeleton cannot follow another's IK'd pose in the
 same frame, and it has no lean; this solve is the one monster-forge checks offline, and the two
@@ -837,15 +840,26 @@ each pair frame by frame and measures the contacts on the pose as rendered (afte
 plus finite bones, feet on the floor and the hand-over to idle. Default pairs, 2026-11-08: tough ->
 bandit (similar size) max 0.4 cm, ogre -> bandit (large grabs medium; offset 0.45 m, lean up to
 21 deg) max 0.9 cm, tolerance 2.8 / 3.7 cm: ALL PASS, the same numbers as monster-forge's
-`tools/paired.py check`. Sync: any UAL biped brings `_shared/paired/` along
+`tools/paired.py check`. `grapple_up` (2026-11-08): bandit -> ogre (1.82) max 2.8 cm, tough -> ogre
+1.3 cm, guard -> troll and priest -> troll (2.04) 0.6 cm; hill-giant -> ogre (`grapple_big`, ratio
+0.75, lean 55 deg) 1.7 cm. tough -> hill-giant (2.10) fails by ~50 cm: the hill giant is Huge (two
+sizes up), its arms are short and its belly holds the tough 1 m off; callers should refuse grapples
+more than one size up anyway. Sync: any UAL biped brings `_shared/paired/` along
 (`tools/sync_monsters.py --ids bandit tough ogre guard`).
 
 ### LODs
 
 All LOD meshes are skinned to the one LOD0 skeleton with the same `Skin`, so a clip
-drives every LOD. Checked by CPU skinning: each LOD-k vertex matched to its nearest LOD0
-vertex moves the same way mid-walk (p95 difference 2-37 mm while LOD0 vertices move up to
-0.07-0.45 m). Screenshots at the same frame show the same pose and texture on LOD0-3.
+drives every LOD. Checked by CPU skinning (`check_monsters.gd`, mid-clip): each LOD-k vertex is
+matched to its nearest LOD0 vertex whose normal agrees (dot > 0.3, so a tentacle tip resting on
+the body is not matched to the body under it) and skinned at its own rest position twice, with its own
+influences and with the LOD0 vertex's; p95 of the difference must stay under 0.1 x p95 of LOD0's
+displacement + 5 mm. Until 2026-11-08 the check compared the two vertices' displacements, which also
+measured the decimation (LOD3 vertices sit up to 7-14 cm off the nearest LOD0 vertex where fingers and
+robe folds collapse): bandit's death clip read 8.7 cm on LOD3 with weights that agree to 0.8 cm. That
+number is still printed ("geometry"). Screenshots at the same frame show the same pose and texture on
+LOD0-3. monster-forge `tools/relod.py check` runs the same comparison on every monster (docs/lods.md
+"Rigged LODs").
 
 Switching is **automatic, with `GeometryInstance3D.visibility_range_begin/end`**. The
 switch distances come from the monster-forge viewer's screen-coverage thresholds (LOD0

@@ -133,7 +133,7 @@ func _row(m: Node3D, details: Array[String]) -> String:
 				d.append("  %s @ %.2fs: %d/%d bones posed off rest" % [clip, t, moved, sk.get_bone_count()])
 				for k in range(1, m.lods.size()):
 					var fd := _follow_dev(m, pos, k)
-					d.append("    LOD%d follows the skeleton: vertex displacement vs nearest LOD0 vertex, median %.4f m, p95 %.4f m (LOD0 displacement p95 %.3f m)" % [k, fd[0], fd[1], fd[2]])
+					d.append("    LOD%d follows the skeleton: skinned with its own vs the nearest LOD0 vertex's weights, median %.4f m, p95 %.4f m (LOD0 displacement p95 %.3f m; geometry: displacement vs nearest LOD0 vertex p95 %.4f m)" % [k, fd[0], fd[1], fd[2], fd[3]])
 					_check(fd[1] < 0.1 * fd[2] + 0.005, "%s: LOD%d does not follow the skeleton (p95 %.3f m)" % [m.id, k, fd[1]])
 				for so in ["hand_r", "hand_l", "grip_r", "grip_l"]:
 					if m.has_socket(so):
@@ -211,7 +211,6 @@ func _row(m: Node3D, details: Array[String]) -> String:
 ## CPU linear-blend skinning of a MeshInstance3D's surface 0 with the current (or rest) pose,
 ## in the monster's space. Godot skins on the GPU and has no readback, so this re-does it.
 func _skinned(m: Node3D, mi: MeshInstance3D, rest: bool) -> PackedVector3Array:
-	var sk: Skeleton3D = m.skeleton
 	var arr := mi.mesh.surface_get_arrays(0)
 	var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 	if rest:
@@ -219,6 +218,18 @@ func _skinned(m: Node3D, mi: MeshInstance3D, rest: bool) -> PackedVector3Array:
 	var bones: PackedInt32Array = arr[Mesh.ARRAY_BONES]
 	var w: PackedFloat32Array = arr[Mesh.ARRAY_WEIGHTS]
 	var per := bones.size() / v.size()
+	var mats := _skin_mats(m, mi)
+	var lift := _lift(m)
+	var out := PackedVector3Array()
+	out.resize(v.size())
+	for i in v.size():
+		out[i] = _skin_point(mats, lift, v[i], bones, w, per, i)
+	return out
+
+
+## Bind matrices of mi's skin under the skeleton's current pose (pose x bind).
+func _skin_mats(m: Node3D, mi: MeshInstance3D) -> Array[Transform3D]:
+	var sk: Skeleton3D = m.skeleton
 	var skin: Skin = mi.skin
 	var mats: Array[Transform3D] = []
 	for i in skin.get_bind_count():
@@ -226,21 +237,24 @@ func _skinned(m: Node3D, mi: MeshInstance3D, rest: bool) -> PackedVector3Array:
 		if b < 0:
 			b = sk.find_bone(skin.get_bind_name(i))
 		mats.append(sk.get_bone_global_pose(b) * skin.get_bind_pose(i))
-	# Shared UAL clips: the floor lift is a SkeletonModifier3D on the root bone (an ancestor of
-	# every weighted bone); get_bone_global_pose() here is the pose before modifiers, so add it.
-	var lift := Vector3.ZERO
-	var mod := sk.get_node_or_null("ual_lift")
-	if mod != null:
-		lift = mod.axis * m.ual_lift_now()
-	var out := PackedVector3Array()
-	out.resize(v.size())
-	for i in v.size():
-		var p := lift
-		for j in per:
-			var wt := w[i * per + j]
-			if wt > 0.0:
-				p += (mats[bones[i * per + j]] * v[i]) * wt
-		out[i] = p
+	return mats
+
+
+## Shared UAL clips: the floor lift is a SkeletonModifier3D on the root bone (an ancestor of
+## every weighted bone); get_bone_global_pose() is the pose before modifiers, so add it.
+func _lift(m: Node3D) -> Vector3:
+	var sk: Skeleton3D = m.skeleton
+	var mod: Node = sk.get_node_or_null("ual_lift")
+	return Vector3.ZERO if mod == null else mod.axis * m.ual_lift_now()
+
+
+## Point p skinned with vertex k's influences (bones, weights, per influences per vertex).
+func _skin_point(mats: Array[Transform3D], lift: Vector3, p: Vector3, bones: PackedInt32Array, w: PackedFloat32Array, per: int, k: int) -> Vector3:
+	var out := lift
+	for j in per:
+		var wt := w[k * per + j]
+		if wt > 0.0:
+			out += (mats[bones[k * per + j]] * p) * wt
 	return out
 
 
@@ -283,12 +297,26 @@ func _aabb(pts: PackedVector3Array) -> AABB:
 
 
 ## Does LOD k deform like LOD0? Each LOD k vertex is matched to its nearest LOD0 vertex in
-## the rest pose; with the same skeleton and skin their displacements under the current pose
-## agree. Returns [median, p95 of |disp_k - disp_0|, p95 of |disp_0|].
+## the rest pose whose normal agrees (dot > 0.3; else the nearest) and skinned twice at its own rest position: with its own influences (as the
+## engine draws it) and with the LOD0 vertex's. They agree when the LOD carries LOD0's skin
+## weights. (Comparing displacements, |disp_k - disp_0|, also measured the decimation: a LOD3
+## vertex 6-12 cm off its nearest LOD0 vertex (collapsed fingers, robe folds) moves differently
+## under a large turn even with identical weights; bandit's death clip read 8.7 cm that way
+## with weights that agree to 0.8 cm. That number is still printed, as "geometry".)
+## Returns [median, p95 of the weights difference, p95 of |disp_0|, p95 of |disp_k - disp_0|].
 func _follow_dev(m: Node3D, pos0: PackedVector3Array, k: int) -> Array:
 	var rest0 := _skinned(m, m.lods[0], true)
 	var restk := _skinned(m, m.lods[k], true)
 	var posk := _skinned(m, m.lods[k], false)
+	var arr0: Array = (m.lods[0] as MeshInstance3D).mesh.surface_get_arrays(0)
+	var nrm0: PackedVector3Array = arr0[Mesh.ARRAY_NORMAL]
+	var nrmk: PackedVector3Array = (m.lods[k] as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_NORMAL]
+	var bones0: PackedInt32Array = arr0[Mesh.ARRAY_BONES]
+	var w0: PackedFloat32Array = arr0[Mesh.ARRAY_WEIGHTS]
+	var per0 := bones0.size() / rest0.size()
+	var mats0 := _skin_mats(m, m.lods[0])
+	var lift := _lift(m)
+	var geo := PackedFloat32Array()
 	var cell := 0.05 * maxf(m.aabb.size.y, 0.5)
 	var grid := {}
 	for i in rest0.size():
@@ -304,6 +332,8 @@ func _follow_dev(m: Node3D, pos0: PackedVector3Array, k: int) -> Array:
 		var c := Vector3i((restk[i] / cell).floor())
 		var best := -1
 		var bd := INF
+		var agree := -1   # nearest whose normal agrees: where two sheets touch (tentacle on body) the
+		var ad := INF     # nearest vertex can be on the other one
 		for r in 3:
 			for dx in range(-r, r + 1):
 				for dy in range(-r, r + 1):
@@ -313,13 +343,19 @@ func _follow_dev(m: Node3D, pos0: PackedVector3Array, k: int) -> Array:
 							if dd < bd:
 								bd = dd
 								best = j
-			if best >= 0:
+							if dd < ad and nrm0[j].dot(nrmk[i]) > 0.3:
+								ad = dd
+								agree = j
+			if agree >= 0:
 				break
 		if best >= 0:
-			errs.append(((posk[i] - restk[i]) - (pos0[best] - rest0[best])).length())
+			var ref := agree if agree >= 0 else best
+			errs.append((posk[i] - _skin_point(mats0, lift, restk[i], bones0, w0, per0, ref)).length())
+			geo.append(((posk[i] - restk[i]) - (pos0[best] - rest0[best])).length())
 	errs.sort()
 	mags.sort()
-	return [errs[errs.size() / 2], errs[int(errs.size() * 0.95)], mags[int(mags.size() * 0.95)]]
+	geo.sort()
+	return [errs[errs.size() / 2], errs[int(errs.size() * 0.95)], mags[int(mags.size() * 0.95)], geo[int(geo.size() * 0.95)]]
 
 
 ## [head-end dz, toe dz, min z of top band, max z of top band]
