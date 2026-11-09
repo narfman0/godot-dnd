@@ -731,6 +731,16 @@ None were dropped on the pilots.
 `play()` and the settle hand-over; the lab sets 0.25 s. `Monster.current_clip` is the
 clip `play()` last started; the lab HUD shows "death (last frame)" for a held one-shot.
 
+**Ground speed (quadruped mocap clips, 2026-11-08).** Canonical quadrupeds' `walk` and `run`
+come from CC0 mocap retargeted in monster-forge (its docs/rig-anim.md "Quadruped mocap clips"):
+their planted feet slide back at a fixed speed, recorded as `manifest.anim.speeds` and synced as
+`monster.json` `speeds` ({clip: m/s at 1x}). `Monster.clip_speed(clip)` reads it (0 = unknown,
+every procedural clip), `Monster.move_speed_scale(clip, ground_speed)` is the
+`anim.speed_scale` that keeps the feet planted while the node moves at `ground_speed` m/s
+(clamped 0.25-4, 1.0 without a speed). Opt-in: nothing in the loader changes `speed_scale`;
+a mover sets it (and resets it to 1 for other clips). Wolf: walk 0.53 m/s, so moving at
+1.5 m/s plays the walk at 2.85x.
+
 Loop modes come from a name list, `Monster.LOOPING` (`idle`, `walk`, `run`, `move`, `fly`,
 `swim`, `hover`), not from the GLB, which has no loop flag. Every other clip (`hit`,
 `death`, `attack_*`, `breath`) is `LOOP_NONE`: it plays once and stops on its last frame.

@@ -535,6 +535,21 @@ func move_clip() -> String:
 	return ""
 
 
+## Ground speed (m/s at speed_scale 1) a locomotion clip's planted feet imply: monster.json
+## speeds (monster-forge manifest anim.speeds; the quadruped mocap walk and run). 0 = unknown.
+func clip_speed(clip: String) -> float:
+	var s = info.get("speeds", {})
+	return float(s.get(clip, 0.0)) if s is Dictionary else 0.0
+
+
+## The AnimationPlayer speed_scale at which `clip`'s feet do not skate while the monster moves
+## at `ground_speed` m/s (clamped 0.25-4); 1.0 when the clip has no recorded speed. Opt-in:
+## a caller moving the monster sets anim.speed_scale to it (docs/monsters.md "Animations").
+func move_speed_scale(clip: String, ground_speed: float) -> float:
+	var v := clip_speed(clip)
+	return clampf(ground_speed / v, 0.25, 4.0) if v > 0.0 else 1.0
+
+
 ## Plays a clip from the start; "" or "rest" stops and shows the bind pose. A swarm leader
 ## starts its units too (they keep their phase, see _process).
 func play(clip: String) -> void:

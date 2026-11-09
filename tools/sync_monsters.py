@@ -153,6 +153,11 @@ def monster_json(src: Path, files: dict[str, Path], rec: dict, ov: dict | None =
         out["swarm_unit"] = man["swarm_unit"]
     if shared:
         out["ual_shared"] = shared
+    # ground speed (m/s at 1x) of each locomotion clip with planted feet: monster-forge manifest anim.speeds
+    # (quadruped mocap walk / run); scripts/monster.gd clip_speed() / move_speed_scale()
+    speeds = (man.get("anim") or {}).get("speeds") or {}
+    if speeds:
+        out["speeds"] = {c: v for c, v in sorted(speeds.items()) if c in out["clips"]}
     return out
 
 
