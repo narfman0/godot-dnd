@@ -21,7 +21,16 @@ xvfb-run -a -s "-screen 0 1280x800x24" godot --rendering-driver vulkan \
 ## Sync (`tools/sync_monsters.py`)
 
 Stdlib Python, run with `python3 -I`. Reads `../monster-forge/out/<source>/<id>/` (`--forge`,
-`$MONSTER_FORGE`, `--source`, default `srd-5.2.1`) and writes `assets/monsters/<id>/`:
+`$MONSTER_FORGE`, `--source`, default `srd-5.2.1`) and writes `assets/monsters/<id>/`.
+Other sources (2026-11-09): the registry, overrides and computed tags of a non-SRD source are
+found through monster-forge's `tools/sources.py` and `tools/tags.py` (the private checkout next to
+monster-forge, `MONSTER_FORGE_EXTRA`), so `--source planescape --all` works as is; its monsters land
+in the same `assets/monsters/` (ids never collide: the importer skips SRD slugs), with
+`source` and the source's tags in monster.json. The shared UAL library is one directory for every
+source: a sync writes the union of the library already there and the source's own (same format,
+byte-identical clips), so a Planescape sync never drops the SRD's zombie clips. A `wields` prop
+that `out/props/` does not have yet (non-SRD props are not generated) is left out of monster.json
+with a note.
 
 | file | from |
 |---|---|

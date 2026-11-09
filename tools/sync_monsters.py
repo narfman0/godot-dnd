@@ -71,9 +71,28 @@ def wanted_files(src: Path) -> dict[str, Path]:
     return files
 
 
+def forge_module(forge: Path, name: str):
+    """monster-forge's tools/<name>.py (tools/sources.py resolves a non-SRD source's registry, overrides
+    and computed tags to the private checkout next to monster-forge, MONSTER_FORGE_EXTRA); None when
+    the checkout has no such module (old checkout: the SRD paths under data/ are used)."""
+    tools = str(forge / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    try:
+        return __import__(name)
+    except ImportError:
+        return None
+
+
 def registry(forge: Path, source: str) -> dict:
     """id -> registry record (empty if the registry is missing)."""
     p = forge / "data" / "registry" / f"{source}.json"
+    src = forge_module(forge, "sources")
+    if src is not None:
+        try:
+            p = src.registry_path(source)
+        except (OSError, ValueError, KeyError):
+            pass
     if not p.exists():
         return {}
     r = json.loads(p.read_text())
@@ -85,8 +104,15 @@ def registry(forge: Path, source: str) -> dict:
 def content_tags(forge: Path, source: str) -> dict:
     """id -> content tags from monster-forge's data/tags.computed.json (tools/tags.py; docs/tags.md),
     empty when that file is missing or for another source (the registry's own tags are used then)."""
+    p = forge / "data" / "tags.computed.json"
+    taglib = forge_module(forge, "tags")
+    if taglib is not None:
+        try:
+            p = taglib.computed_path(source)   # registry/<source>.tags.json for a non-SRD source
+        except (OSError, ValueError, KeyError):
+            pass
     try:
-        d = json.loads((forge / "data" / "tags.computed.json").read_text())
+        d = json.loads(p.read_text())
     except (OSError, ValueError):
         return {}
     return d.get("monsters") or {} if d.get("source") == source else {}
@@ -95,6 +121,12 @@ def content_tags(forge: Path, source: str) -> dict:
 def override(forge: Path, source: str, mid: str) -> dict:
     """data/overrides/<source>/<id>.json (empty if missing or unreadable)."""
     p = forge / "data" / "overrides" / source / f"{mid}.json"
+    src = forge_module(forge, "sources")
+    if src is not None:
+        try:
+            p = src.overrides_dir(source) / f"{mid}.json"
+        except (OSError, ValueError, KeyError):
+            pass
     try:
         o = json.loads(p.read_text())
     except (OSError, ValueError):
@@ -172,12 +204,37 @@ def sync_library(out: Path, rel: str, dest: Path) -> list[str]:
     <dest>/<rel>/, once for every monster that uses it; GLBs it no longer lists are removed."""
     src = out / rel
     lib = json.loads((src / "library.json").read_text())
-    files = {"library.json": src / "library.json"}
+    files = {}
     for e in lib.get("clips", {}).values():
         files[e["file"]] = src / e["file"]
     for side in lib.get("paired", {}).values():   # paired animations: one sidecar per entry
         files[side] = src / side
+    # Several sources share one <dest>/<rel>/ (every source's out/<source>/_shared/ual/ holds the same
+    # UAL clips, byte for byte, but only the ones its own monsters use): when the library already
+    # here has the same format, keep its clips this source does not list and write the union, so
+    # syncing Planescape never drops the SRD's zombie clips. A different format replaces it.
+    dl = dest / rel / "library.json"
+    try:
+        old = json.loads(dl.read_text()) if dl.exists() else {}
+    except ValueError:
+        old = {}
+    meta = lambda d: {k: v for k, v in d.items() if k not in ("clips", "paired")}
+    if old and meta(old) == meta(lib):
+        for name, e in old.get("clips", {}).items():
+            if name not in lib.get("clips", {}) and (dest / rel / e["file"]).exists():
+                lib.setdefault("clips", {})[name] = e
+                files[e["file"]] = dest / rel / e["file"]
+        for entry, side in old.get("paired", {}).items():
+            if entry not in lib.get("paired", {}) and (dest / rel / side).exists():
+                lib.setdefault("paired", {})[entry] = side
+                files[side] = dest / rel / side
     changes = copy_files(files, dest / rel)
+    text = json.dumps(lib, indent=1) + "\n"
+    if not dl.exists() or dl.read_text() != text:
+        tmp = dl.with_suffix(".json.tmp")
+        tmp.write_text(text)
+        changes.append(("updated " if dl.exists() else "added   ") + "library.json")
+        tmp.replace(dl)
     for dp in sorted((dest / rel).glob("*.glb")):
         if dp.name not in files:
             dp.unlink()
@@ -299,8 +356,14 @@ def main() -> int:
             print(f"{mid}: skipped (no model_rigged.glb or manifest.json in {src})")
             failed += 1
             continue
+        rec = dict(reg.get(mid, {}))
+        # a prop spec without a generated prop (non-SRD sources: their props are not in props.json yet)
+        missing = [w for w in rec.get("wields", []) if w not in all_props]
+        if missing:
+            print(f"{mid}: wields {missing} not in {prop_root}: left out of monster.json until the prop is made")
+            rec["wields"] = [w for w in rec["wields"] if w in all_props]
         try:
-            changes = sync_one(src, a.dest / mid, reg.get(mid, {}), override(forge, a.source, mid), tags.get(mid))
+            changes = sync_one(src, a.dest / mid, rec, override(forge, a.source, mid), tags.get(mid))
         except (OSError, ValueError, KeyError) as e:
             print(f"{mid}: FAILED {e}")
             failed += 1
